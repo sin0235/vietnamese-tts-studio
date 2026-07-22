@@ -1,3 +1,12 @@
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,12,20&height=180&section=header&text=Vietnamese%20TTS%20Studio&fontSize=42&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Voice%20Cloning%20%E2%80%A2%20Gwen%20%E2%80%A2%20VieNeu%20%E2%80%A2%20F5&descAlignY=56&descSize=17" width="100%"/>
+  <p>
+    <img src="https://img.shields.io/badge/Python-TTS-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+    <img src="https://img.shields.io/badge/Flask-Web%20Studio-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask"/>
+    <img src="https://img.shields.io/badge/Language-Vietnamese-DA251D?style=for-the-badge" alt="Vietnamese"/>
+  </p>
+</div>
+
 # Vietnamese TTS Studio
 
 Flask webapp cho text-to-speech tiếng Việt, hiện hỗ trợ ba engine:
@@ -156,3 +165,10 @@ Biến môi trường hỗ trợ:
 
 - `webapp/runtime/references`: file audio tham chiếu upload lên
 - `webapp/runtime/generated`: audio WAV đầu ra
+
+---
+
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=120&section=footer" width="100%"/>
+  <em>Natural Vietnamese speech and voice cloning.</em>
+</div>
