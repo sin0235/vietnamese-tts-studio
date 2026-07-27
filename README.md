@@ -1,174 +1,227 @@
+# Vietnamese TextVoice Studio
+
 <div align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,12,20&height=180&section=header&text=Vietnamese%20TTS%20Studio&fontSize=42&fontColor=fff&animation=twinkling&fontAlignY=35&desc=Voice%20Cloning%20%E2%80%A2%20Gwen%20%E2%80%A2%20VieNeu%20%E2%80%A2%20F5&descAlignY=56&descSize=17" width="100%"/>
-  <p>
-    <img src="https://img.shields.io/badge/Python-TTS-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
-    <img src="https://img.shields.io/badge/Flask-Web%20Studio-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask"/>
-    <img src="https://img.shields.io/badge/Language-Vietnamese-DA251D?style=for-the-badge" alt="Vietnamese"/>
-  </p>
+  <img src="https://img.shields.io/badge/Python-TTS-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+  <img src="https://img.shields.io/badge/Flask-Web%20Studio-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask"/>
+  <img src="https://img.shields.io/badge/Language-Vietnamese-DA251D?style=for-the-badge" alt="Vietnamese"/>
 </div>
 
-# Vietnamese TTS Studio
+Web studio tạo giọng nói tiếng Việt và clone giọng bằng **Gwen-TTS**. Ứng dụng Flask chạy một engine TTS duy nhất, có sẵn 10 preset voice, hỗ trợ audio tham chiếu tự tải lên, điều chỉnh tham số sinh, quy tắc phát âm và hàng đợi cho request dài.
 
-Flask webapp cho text-to-speech tiếng Việt, hiện hỗ trợ ba engine:
+> Dùng audio khi có quyền sử dụng giọng nói và nội dung trong audio.
 
-- `Gwen-TTS` là model chủ chốt, ưu tiên voice cloning tiếng Việt với transcript tham chiếu.
-- `VieNeu-TTS` giữ vai trò engine phụ cho flow tiếng Việt 24kHz.
-- `F5-TTS` vẫn có sẵn để thử model hoặc flow khác.
+## Tính năng
 
-Web cũng tự chuẩn hóa nhẹ văn bản đầu vào trước khi synthesize, ví dụ dọn xuống dòng/bullet list, dấu chấm lửng, dấu câu lặp và khoảng trắng để nhịp đọc mượt hơn mà không can thiệp mạnh vào transcript tham chiếu.
+- Clone giọng tiếng Việt bằng `g-group-ai-lab/gwen-tts-0.6B`.
+- 10 preset voice có thể nghe thử và dùng trực tiếp.
+- Clone từ audio riêng với transcript tham chiếu bắt buộc.
+- Chuẩn hóa văn bản trước khi synthesize: xuống dòng, danh sách, dấu câu, khoảng trắng; số, ngày tháng và viết tắt được chuẩn hóa thêm khi có `sea-g2p`.
+- Tùy chỉnh tốc độ, sampling, `temperature`, `top_p`, `top_k`, `repetition_penalty` và `max_new_tokens`.
+- Thêm, nhập hoặc xuất quy tắc phát âm `.json`/`.txt`.
+- Lưu lịch sử synthesize và cài đặt phát âm cục bộ.
+- Tùy chọn ASR để nhận transcript audio tham chiếu hoặc chép lời audio dài.
 
-Hiện tại repo mặc định chạy ở chế độ `TTS-only`: ASR bị tắt sẵn để tránh xung đột dependency/model với `qwen-tts`. Nếu cần bật lại ASR, đặt `TTS_ENABLE_ASR=1` trước khi khởi động app.
+## Yêu cầu
 
-## Run
+- Python 3.
+- GPU CUDA khả dụng cho Gwen-TTS. App sẽ hiển thị engine chưa sẵn sàng nếu không tìm thấy CUDA.
+- Môi trường Python có PyTorch tương thích CUDA và `torch.cuda.is_available()` trả về `True`.
+- Internet trong lần chạy đầu để tải model từ Hugging Face.
 
-```powershell
+Gwen-TTS cần audio tham chiếu dài từ 2 đến 18 giây. Khoảng 3 đến 10 giây, một người nói và ít nhiễu cho kết quả ổn định nhất.
+
+## Cài đặt và chạy
+
+Ví dụ cho Linux:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+python -m pip install -U qwen-tts sea-g2p
 python webapp/app.py
 ```
 
-App chạy tại `http://127.0.0.1:8386`.
+Mở `http://127.0.0.1:8386`.
 
-## Colab notebook
+`requirements.txt` chỉ chứa dependency web và xử lý audio cơ bản. `qwen-tts` cùng stack PyTorch/CUDA được cài riêng vì phụ thuộc GPU theo từng máy.
 
-Notebook Colab để clone hoặc pull repo, chạy webapp và mở Cloudflare tunnel:
+Kiểm tra CUDA trước khi chạy:
 
-- `colab_tts_cloudflare.ipynb`
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
 
-Nếu gặp lỗi kiểu `Codec 'neuphonic/distill-neucodec' requires PyTorch`, `torch >= 2.11.0`, `libtorchaudio.so: undefined symbol: torch_list_push_back`, hoặc thiếu stack cho `qwen-tts`, hãy dùng notebook mới nhất:
+Kết quả cuối phải là `True`.
 
-- notebook hiện mặc định `TTS_DEFAULT_ENGINE=gwen`, chỉ cài `qwen-tts`, và export `TTS_ENABLED_ENGINES=gwen` để runtime Colab chỉ hiện engine chủ đạo
-- notebook pin đúng cặp `torch==2.11.0`, `torchaudio==2.11.0` và index CUDA 12.8 (`cu128`) theo hướng upstream của VieNeu
-- notebook cũng dọn residue `torch/torchaudio/neucodec/vieneu` cũ trước khi cài và verify stack trong subprocess sạch để tránh lệch binary ABI
-- notebook export thêm `GWEN_MODEL_ID` và `GWEN_ATTN_IMPLEMENTATION` để backend load Gwen-TTS theo đúng runtime hiện tại
+## Dùng Studio
 
-## Engine setup
+1. Mở `/studio/gwen`.
+2. Chọn một preset voice hoặc mở `/voices` để tải audio mẫu và tạo clone từ audio riêng.
+3. Nếu dùng audio riêng, tải file `.wav`, `.mp3`, `.m4a`, `.flac` hoặc `.ogg`, rồi nhập đúng transcript của câu trong audio.
+4. Nhập nội dung cần đọc, tối đa 5.000 ký tự.
+5. Bấm **Chuyển Đổi**. Audio đầu ra là WAV, có thể phát, tải xuống hoặc sao chép URL.
+
+Preset voice bỏ qua bước upload và transcript vì audio cùng transcript đã có sẵn trong project.
+
+### Tinh chỉnh phát âm
+
+Mục **Phát âm** thay chuỗi trước khi gửi text vào model. Dùng khi model đọc sai tên riêng, chữ viết tắt hoặc thuật ngữ.
+
+File import hỗ trợ hai dạng:
+
+```json
+[
+  { "from": "KPI", "to": "cây pi ai" },
+  { "from": "AI", "to": "ây ai" }
+]
+```
+
+Hoặc file `.txt`, mỗi dòng một cặp:
+
+```text
+KPI -> cây pi ai
+AI|ây ai
+TP.HCM = thành phố Hồ Chí Minh
+```
+
+## Cấu hình môi trường
+
+### Web server
+
+- `TTS_WEBAPP_HOST`: host bind; mặc định `0.0.0.0`.
+- `TTS_WEBAPP_PORT`: port; mặc định `8386`.
+- `TTS_WEBAPP_DEBUG`: đặt `1` để bật Flask debug; mặc định tắt.
+- `TTS_WEBAPP_RELOADER`: đặt `1` để bật reloader; mặc định tắt.
+
+Ví dụ:
+
+```bash
+TTS_WEBAPP_HOST=127.0.0.1 TTS_WEBAPP_PORT=9000 python webapp/app.py
+```
 
 ### Gwen-TTS
 
-```powershell
-python -m pip install -U qwen-tts
-```
+- `GWEN_MODEL_ID`: model mặc định; mặc định `g-group-ai-lab/gwen-tts-0.6B`.
+- `GWEN_MODEL_CHOICES`: thêm model vào UI, phân cách bằng `;`. Có thể dùng `Nhãn=model-id`.
+- `GWEN_DTYPE`: `bfloat16`, `float16` hoặc `float32`; mặc định `bfloat16`.
+- `GWEN_ATTN_IMPLEMENTATION`: mặc định `flash_attention_2`. Khi model không load được với lựa chọn này, app thử lại bằng `sdpa`.
 
-Gwen-TTS là model mặc định của project. Engine này cần:
+Ví dụ:
 
-- GPU CUDA để chạy local
-- audio tham chiếu khoảng 3-10 giây, một người nói, ít nhạc nền
-- transcript tham chiếu đúng với câu đang có trong audio mẫu
-
-Web hiện có sẵn 9 preset voice chính thức của Gwen-TTS, lấy từ demo/repo gốc, và thêm 1 preset custom `Khả Hân`:
-
-- `Yến Nhi`
-- `Mỹ Vân`
-- `Ái Vy`
-- `An Nhi`
-- `Diệu Linh`
-- `Khánh Toàn`
-- `Trần Lâm`
-- `NSND Hà Phương`
-- `NSND Kim Cúc`
-- `Khả Hân`
-
-Metadata nằm ở `webapp/data/gwen_preset_voices.json`, audio preview nằm ở `webapp/static/voice_presets`.
-
-Biến môi trường hỗ trợ:
-
-- `GWEN_MODEL_ID` mặc định là `g-group-ai-lab/gwen-tts-0.6B`
-- `GWEN_MODEL_CHOICES` thêm preset model Gwen trên UI, ngăn cách bằng `;`, hỗ trợ `label=value`
-- `GWEN_DTYPE` mặc định `bfloat16`
-- `GWEN_ATTN_IMPLEMENTATION` mặc định `flash_attention_2`; app sẽ fallback sang `sdpa` nếu load không được
-
-Nếu runtime không có GPU CUDA hoặc không cài được `flash-attn`, hãy giữ `GWEN_ATTN_IMPLEMENTATION=sdpa` hoặc đổi sang VieNeu/F5.
-
-### F5-TTS
-
-```powershell
-python -m pip install f5-tts
-```
-
-Nếu gặp lỗi kiểu `No module named 'cached_path'`, môi trường đang có khả năng đã cài `f5-tts` thiếu dependency. Hãy cài lại:
-
-```powershell
-python -m pip install -U f5-tts cached_path
-```
-
-Trong Colab notebook của repo này, không nên cài `f5-tts` với `--no-deps`.
-
-App hiện sẽ tự chuẩn hóa reference audio của F5 sang WAV mono 24kHz trước khi infer. Nếu bạn upload `mp3/m4a/ogg`, runtime vẫn cần có `ffmpeg`; còn nếu không có `ffmpeg`, hãy dùng `wav/flac`.
-
-Biến môi trường hỗ trợ:
-
-- `F5_MODEL_NAME`
-- `F5_MODEL_CHOICES` (danh sách model hiển thị thêm trên UI, ngăn cách bằng `;`, hỗ trợ `label=value`)
-- `F5_CKPT_FILE`
-- `F5_VOCAB_FILE`
-- `F5_VOCODER_LOCAL_PATH`
-
-### VieNeu-TTS
-
-```powershell
-python -m pip install -U vieneu==2.4.3
-```
-
-Nếu bạn cần chạy `standard/fast` trên Colab, hãy dùng cell install mới của notebook. `pip install vieneu[gpu]` thường fail vì pip không tự resolve các wheel GPU mà upstream map qua `uv` sources.
-
-Biến môi trường hỗ trợ:
-
-- `VIENEU_MODE` mặc định là `standard`
-- `VIENEU_MODE_CHOICES` thêm preset mode trên UI, ví dụ `Standard=standard;Fast=fast;Turbo=turbo;Turbo GPU=turbo_gpu`
-
-Khuyến nghị:
-
-- giữ `VIENEU_MODE=standard` nếu cần engine phụ chất lượng cao và chấp nhận nhập transcript
-- chỉ đổi về `turbo` nếu runtime không đủ dependency cho Standard hoặc không có GPU
-- với Colab, rerun lại cell install nếu trước đó runtime từng cài torch 2.6/cu124 hoặc notebook cũ
-- dùng audio tham chiếu dài khoảng 3-8 giây, một người nói, ít nhạc nền
-- transcript tham chiếu là bắt buộc với `standard` và `fast`
-
-## API
-
-- `GET /api/tts/status`
-- `POST /api/tts/transcribe-reference` chỉ hoạt động khi bật `TTS_ENABLE_ASR=1`
-- `POST /api/tts/generate` nhận thêm `model_key` và `custom_model` để chọn model theo từng request
-- `GET /outputs/<filename>`
-
-## Speech-to-text Cho Audio Clone
-
-Web hiện đang tắt mặc định tính năng ASR này để tránh xung đột với Gwen-TTS. Nếu cần tự nhận diện transcript từ audio tham chiếu hoặc dùng trang `/asr`, hãy bật lại:
-
-```powershell
-$env:TTS_ENABLE_ASR="1"
+```bash
+export GWEN_DTYPE=float16
+export GWEN_ATTN_IMPLEMENTATION=sdpa
 python webapp/app.py
 ```
 
-Khi ASR đang tắt, hãy nhập transcript thủ công cho audio clone trước khi generate.
+### ASR tùy chọn
 
-Cài dependency cho tính năng này:
+ASR tắt mặc định để tránh xung đột dependency/model với Gwen-TTS. Bật ASR để nhận transcript tham chiếu bằng Whisper hoặc dùng trang `/asr` với VibeVoice-ASR.
 
-```powershell
+```bash
 python -m pip install -U transformers accelerate sentencepiece
+TTS_ENABLE_ASR=1 python webapp/app.py
 ```
 
-Biến môi trường hỗ trợ:
+Biến liên quan:
 
-- `TTS_ENABLE_ASR` mặc định `0`; đặt `1` để bật lại toàn bộ flow ASR
-- `ASR_MODEL_ID` mặc định `openai/whisper-small`
-- `ASR_LANGUAGE` mặc định `vi`
-- `ASR_CHUNK_LENGTH_S` mặc định `18`
+- `TTS_ENABLE_ASR`: đặt `1` để bật ASR.
+- `ASR_MODEL_ID`: Whisper cho transcript tham chiếu; mặc định `openai/whisper-small`.
+- `ASR_LANGUAGE`: ngôn ngữ Whisper; mặc định `vi`.
+- `ASR_CHUNK_LENGTH_S`: chunk Whisper, từ 8 đến 30 giây; mặc định `18`.
+- `VIBEVOICE_ASR_MODEL_ID`: model cho `/asr`; mặc định `microsoft/VibeVoice-ASR-HF`.
 
-## UI routes
+## API
 
-- `/studio/gwen`
-- `/studio/vieneu`
-- `/studio/f5`
+### Trạng thái engine
 
-## Runtime folders
+```http
+GET /api/tts/status
+```
 
-- `webapp/runtime/references`: file audio tham chiếu upload lên
-- `webapp/runtime/generated`: audio WAV đầu ra
+Trả trạng thái Gwen-TTS, GPU/CPU và trạng thái ASR.
 
----
+### Sinh audio
 
-<div align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=120&section=footer" width="100%"/>
-  <em>Natural Vietnamese speech and voice cloning.</em>
-</div>
+```http
+POST /api/tts/generate
+Content-Type: multipart/form-data
+```
+
+Trường cần có:
+
+- `text`: nội dung cần đọc.
+- Một trong hai cách chọn giọng:
+  - `preset_voice_id`, ví dụ `yen_nhi`; hoặc
+  - `reference_audio` và `reference_text` cho clone audio riêng.
+
+Trường tùy chọn gồm `model_key`, `custom_model`, `speed`, các trường `gwen_*`, cặp `pronunciation_from`/`pronunciation_to`, và `async`.
+
+Ví dụ clone audio riêng:
+
+```bash
+curl -X POST http://127.0.0.1:8386/api/tts/generate \
+  -F 'text=Xin chào, đây là bản ghi thử.' \
+  -F 'reference_audio=@sample.wav' \
+  -F 'reference_text=Xin chào, đây là câu trong audio mẫu.'
+```
+
+Thêm `-F 'async=1'` để nhận `202 Accepted` cùng `job_id`. Theo dõi job qua:
+
+```http
+GET /api/tts/jobs/<job_id>
+```
+
+### Voice, cài đặt và lịch sử
+
+- `GET /outputs/<filename>`: phát file WAV đã sinh.
+- `GET /api/history`: lấy tối đa 50 lần synthesize gần nhất.
+- `GET /api/settings/load`: lấy quy tắc phát âm và text gần nhất.
+- `POST /api/settings/save`: lưu quy tắc phát âm và text gần nhất.
+- `POST /api/pronunciation/upload`: đọc file quy tắc `.json` hoặc `.txt`.
+- `POST /api/pronunciation/export`: xuất quy tắc thành JSON.
+
+### ASR
+
+Các endpoint sau chỉ hoạt động khi `TTS_ENABLE_ASR=1`:
+
+- `POST /api/tts/transcribe-reference`: nhận transcript từ `reference_audio`.
+- `POST /api/asr/transcribe`: chép lời từ trường `audio`, hỗ trợ `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.webm`.
+
+Giới hạn upload hiện tại là 32 MB.
+
+## Dữ liệu runtime
+
+App tự tạo các thư mục và file sau khi cần:
+
+- `webapp/runtime/references/`: audio tham chiếu đã upload.
+- `webapp/runtime/generated/`: WAV đã sinh.
+- `webapp/data/user_settings.json`: quy tắc phát âm và text gần nhất.
+- `webapp/data/tts_history.json`: lịch sử synthesize, tối đa 50 mục.
+- `models/`: thư mục model cục bộ dành cho runtime.
+
+Các file runtime có thể chứa audio và nội dung người dùng. Không đưa chúng lên repository hoặc chia sẻ khi chưa có quyền.
+
+## Cấu trúc
+
+```text
+webapp/
+├── app.py                 # Flask routes, API và hàng đợi synthesize
+├── tts_service.py         # Gwen-TTS, chuẩn hóa text/audio và ASR
+├── data/                  # preset voice, cài đặt và lịch sử cục bộ
+├── static/                # CSS, logo và audio preset
+└── templates/             # Studio, danh sách voice và ASR
+
+tests/                     # unittest cho API và helper TTS
+requirements.txt           # dependency web/audio tối thiểu
+```
+
+## Kiểm tra
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Test không tải model Gwen-TTS hoặc chạy inference GPU thật.
