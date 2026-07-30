@@ -1,153 +1,157 @@
+<p align="center">
+  <strong>Tiếng Việt</strong> · <a href="README.en.md">English</a>
+</p>
+
 <div align="center">
-  <img src="webapp/static/images/logo.png" width="96" alt="Vietnamese TextVoice Studio logo" />
+  <img src="webapp/static/images/logo.png" width="96" alt="Logo Vietnamese TextVoice Studio" />
   <h1>Vietnamese TextVoice Studio</h1>
-  <p>Vietnamese speech synthesis studio built around Gwen-TTS, reference-audio conditioning, text normalization, long-form generation, and a local Flask web/API layer.</p>
+  <p>Studio tổng hợp tiếng nói tiếng Việt xây dựng trên Gwen-TTS, hỗ trợ điều kiện hóa bằng audio tham chiếu, chuẩn hóa văn bản, sinh nội dung dài và lớp web/API Flask chạy cục bộ.</p>
 
   <img src="https://img.shields.io/badge/Python-3-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3" />
   <img src="https://img.shields.io/badge/Flask-3.1%2B-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask 3.1+" />
-  <img src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch with CUDA" />
-  <img src="https://img.shields.io/badge/Hugging%20Face-Gwen--TTS-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Gwen-TTS on Hugging Face" />
-  <img src="https://img.shields.io/badge/Audio-WAV-7C3AED?style=for-the-badge" alt="WAV output" />
-  <img src="https://img.shields.io/badge/Language-Vietnamese-DA251D?style=for-the-badge" alt="Vietnamese" />
+  <img src="https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" alt="PyTorch với CUDA" />
+  <img src="https://img.shields.io/badge/Hugging%20Face-Gwen--TTS-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="Gwen-TTS trên Hugging Face" />
+  <img src="https://img.shields.io/badge/Audio-WAV-7C3AED?style=for-the-badge" alt="Đầu ra WAV" />
+  <img src="https://img.shields.io/badge/Language-Vietnamese-DA251D?style=for-the-badge" alt="Tiếng Việt" />
 </div>
 
-> Use reference recordings only with the speaker's consent and with permission to synthesize the intended content.
+> Chỉ sử dụng bản ghi tham chiếu khi có sự đồng ý của người nói và có quyền tổng hợp nội dung dự kiến.
 
-## Overview
+## Tổng quan
 
-Vietnamese TextVoice Studio targets two related tasks:
+Vietnamese TextVoice Studio phục vụ hai tác vụ liên quan:
 
 ```text
-Vietnamese TTS
-Target text + bundled preset reference → Gwen-TTS → WAV
+TTS tiếng Việt
+Văn bản đích + preset tham chiếu có sẵn → Gwen-TTS → WAV
 
-Reference-conditioned synthesis (voice cloning)
-Reference audio + exact reference transcript + target text → Gwen-TTS → WAV
+Tổng hợp có điều kiện tham chiếu (sao chép giọng nói)
+Audio tham chiếu + transcript tham chiếu chính xác + văn bản đích → Gwen-TTS → WAV
 ```
 
-“Voice cloning” in this repository means inference-time conditioning. The application does not train, fine-tune, or persist a new speaker model for each user. A reference recording and its transcript condition every synthesis request.
+“Sao chép giọng nói” trong repository này là điều kiện hóa tại thời điểm inference. Ứng dụng không train, fine-tune hoặc lưu một model người nói mới cho từng người dùng. Mỗi yêu cầu tổng hợp đều được điều kiện hóa bằng bản ghi tham chiếu và transcript tương ứng.
 
-The project adds an application layer around model inference: Vietnamese-oriented text cleanup, optional `sea-g2p` normalization, pronunciation overrides, reference validation, chunked long-text inference, crossfaded audio assembly, preset management, background jobs, local history/settings, and optional ASR. The primary browser Studio currently synthesizes with bundled presets; custom references are fully accepted by the TTS API.
+Project bổ sung lớp ứng dụng quanh model inference: làm sạch văn bản theo tiếng Việt, chuẩn hóa tùy chọn bằng `sea-g2p`, quy tắc phát âm, kiểm tra tham chiếu, chia đoạn khi sinh văn bản dài, ghép audio bằng crossfade, quản lý preset, job nền, lịch sử/cài đặt cục bộ và ASR tùy chọn. Studio trên trình duyệt hiện tổng hợp bằng preset có sẵn; TTS API hỗ trợ đầy đủ tham chiếu tùy chỉnh.
 
-## Technical Highlights
+## Điểm kỹ thuật chính
 
-- Two-stage Vietnamese text preparation with Unicode, formatting, punctuation, date, number, unit, and abbreviation handling.
-- Exact, user-defined pronunciation substitutions applied before language normalization.
-- Ten bundled reference voices with local WAV assets and matching transcripts.
-- Reference-conditioned Gwen-TTS inference with direct-call and compatibility fallbacks.
-- Sentence-aware 320-character chunking followed by sequential synthesis and 80 ms crossfades.
-- Configurable main-talker and code-predictor generation parameters with server-side range clamping.
-- Single-worker in-process background synthesis with polling and local JSON history.
-- Optional Whisper reference transcription and VibeVoice-ASR general transcription.
+- Chuẩn bị văn bản tiếng Việt qua hai giai đoạn, xử lý Unicode, định dạng, dấu câu, ngày, số, đơn vị và từ viết tắt.
+- Thay thế cách phát âm chính xác do người dùng định nghĩa trước bước chuẩn hóa ngôn ngữ.
+- Mười giọng tham chiếu có sẵn với file WAV cục bộ và transcript tương ứng.
+- Gwen-TTS inference có điều kiện tham chiếu với lệnh gọi trực tiếp và các fallback tương thích.
+- Chia đoạn 320 ký tự theo câu, sinh tuần tự và crossfade 80 ms.
+- Tham số sinh cho main-talker và code-predictor có thể cấu hình, được giới hạn phạm vi phía server.
+- Tổng hợp nền trong process bằng một worker, hỗ trợ polling và lịch sử JSON cục bộ.
+- Tùy chọn chép lời tham chiếu bằng Whisper và chép lời tổng quát bằng VibeVoice-ASR.
 
-## System Architecture
+## Kiến trúc hệ thống
 
 ```mermaid
 flowchart LR
-    Browser[Browser: Studio / Voices / ASR] --> Flask[Flask routes and JSON API]
-    API[External API client] --> Flask
+    Browser[Trình duyệt: Studio / Voices / ASR] --> Flask[Flask routes và JSON API]
+    API[API client bên ngoài] --> Flask
 
-    Flask --> Jobs[In-process TTS job manager<br/>1 worker]
+    Flask --> Jobs[Trình quản lý TTS job trong process<br/>1 worker]
     Flask --> Service[TTSStudioService]
     Jobs --> Service
 
-    Service --> Text[Text and pronunciation processing]
-    Service --> Voice[Preset or uploaded reference]
-    Service --> Loader[Lazy model loader and cache]
+    Service --> Text[Xử lý văn bản và phát âm]
+    Service --> Voice[Preset hoặc tham chiếu tải lên]
+    Service --> Loader[Lazy model loader và cache]
     Loader --> Gwen[Gwen-TTS / Qwen3TTSModel]
     Gwen --> CUDA[CUDA device 0]
-    Gwen --> Audio[Chunk conversion and 80 ms crossfade]
-    Audio --> WAV[Generated WAV]
+    Gwen --> Audio[Chuyển đổi chunk và crossfade 80 ms]
+    Audio --> WAV[WAV được tạo]
 
-    Flask --> ASR[Optional Whisper / VibeVoice-ASR]
-    Flask --> JSON[Local settings and history JSON]
+    Flask --> ASR[Whisper / VibeVoice-ASR tùy chọn]
+    Flask --> JSON[Cài đặt và lịch sử JSON cục bộ]
     Voice --> Runtime[Local runtime/references]
     WAV --> Generated[Local runtime/generated]
 ```
 
-### Layers
+### Các lớp
 
-- **UI:** server-rendered Jinja templates, vanilla JavaScript, and responsive CSS for Studio, Voices, and optional ASR pages.
-- **Application:** Flask validates multipart requests, serves generated files, persists settings/history, and exposes sync/async APIs.
-- **Service:** `TTSStudioService` owns preprocessing, model resolution/loading, inference, reference handling, audio joining, and ASR.
-- **Runtime:** uploaded references, converted reference WAVs, generated outputs, JSON state, in-memory jobs, and external Hugging Face caches.
+- **UI:** Jinja template render phía server, JavaScript thuần và CSS responsive cho Studio, Voices và trang ASR tùy chọn.
+- **Application:** Flask kiểm tra multipart request, phục vụ file đã sinh, lưu cài đặt/lịch sử và cung cấp API sync/async.
+- **Service:** `TTSStudioService` chịu trách nhiệm tiền xử lý, phân giải/tải model, inference, xử lý tham chiếu, ghép audio và ASR.
+- **Runtime:** tham chiếu tải lên, WAV tham chiếu đã chuyển đổi, đầu ra đã sinh, trạng thái JSON, job trong bộ nhớ và cache Hugging Face bên ngoài.
 
-## End-to-End TTS Pipeline
+## Pipeline TTS đầu cuối
 
 ```mermaid
 flowchart TD
-    Input[Target text] --> Validate[Validate non-empty input<br/>and 5,000-character limit]
-    Validate --> Safe[Safe prompt normalization]
-    Safe --> Pronounce[Apply literal pronunciation overrides]
-    Pronounce --> Vietnamese[SEA-G2P when available<br/>or built-in Vietnamese fallback]
-    Vietnamese --> Chunk{More than 320 characters?}
-    Chunk -->|No| Infer
-    Chunk -->|Yes| Split[Sentence-aware split<br/>then word-aware fallback]
-    Split --> Infer[Sequential Gwen-TTS inference]
+    Input[Văn bản đích] --> Validate[Kiểm tra đầu vào không rỗng<br/>và giới hạn 5.000 ký tự]
+    Validate --> Safe[Chuẩn hóa prompt an toàn]
+    Safe --> Pronounce[Áp dụng quy tắc phát âm literal]
+    Pronounce --> Vietnamese[SEA-G2P khi khả dụng<br/>hoặc fallback tiếng Việt có sẵn]
+    Vietnamese --> Chunk{Dài hơn 320 ký tự?}
+    Chunk -->|Không| Infer
+    Chunk -->|Có| Split[Chia theo câu<br/>sau đó fallback theo từ]
+    Split --> Infer[Gwen-TTS inference tuần tự]
 
-    Preset[Bundled preset WAV + transcript] --> Reference
-    Custom[Uploaded audio + exact transcript] --> Reference[Reference validation / conversion]
+    Preset[WAV preset + transcript] --> Reference
+    Custom[Audio tải lên + transcript chính xác] --> Reference[Kiểm tra / chuyển đổi tham chiếu]
     Reference --> Infer
 
-    Infer --> Waves[Flatten model waveforms to float32]
-    Waves --> Join[Join chunks with 80 ms crossfade]
-    Join --> Output[Write local WAV and history entry]
+    Infer --> Waves[Trải phẳng waveform model thành float32]
+    Waves --> Join[Ghép chunk bằng crossfade 80 ms]
+    Join --> Output[Ghi WAV cục bộ và mục lịch sử]
 ```
 
-Request flow:
+Luồng request:
 
-1. Flask resolves either a bundled `preset_voice_id` or an uploaded `reference_audio`.
-2. `TTSStudioService.synthesize()` validates target text, reference existence, CUDA/model readiness, and the required reference transcript.
-3. Formatting cleanup runs before pronunciation rules. Vietnamese lexical normalization runs after pronunciation rules.
-4. Text longer than 320 normalized characters is split and generated sequentially with the same reference.
-5. Model outputs are flattened to one-dimensional `float32` waveforms and joined with an 80 ms crossfade.
-6. The final waveform is serialized under `webapp/runtime/generated/` and returned through `/outputs/<filename>`.
+1. Flask phân giải `preset_voice_id` có sẵn hoặc `reference_audio` được tải lên.
+2. `TTSStudioService.synthesize()` kiểm tra văn bản đích, sự tồn tại của tham chiếu, trạng thái CUDA/model và transcript tham chiếu bắt buộc.
+3. Làm sạch định dạng chạy trước quy tắc phát âm. Chuẩn hóa từ vựng tiếng Việt chạy sau quy tắc phát âm.
+4. Văn bản dài hơn 320 ký tự sau chuẩn hóa được chia và sinh tuần tự với cùng tham chiếu.
+5. Đầu ra model được trải phẳng thành waveform `float32` một chiều và ghép bằng crossfade 80 ms.
+6. Waveform cuối được ghi dưới `webapp/runtime/generated/` và trả qua `/outputs/<filename>`.
 
-## Vietnamese Text Processing
+## Xử lý văn bản tiếng Việt
 
-Text preparation has two distinct stages.
+Quá trình chuẩn bị văn bản gồm hai giai đoạn riêng biệt.
 
-### 1. Safe prompt normalization
+### 1. Chuẩn hóa prompt an toàn
 
-`_normalize_tts_prompt_text()` performs model-independent cleanup:
+`_normalize_tts_prompt_text()` thực hiện làm sạch độc lập với model:
 
-- Unicode NFC normalization;
-- replacement/removal of non-breaking spaces, zero-width characters, and BOM characters;
-- conversion of ellipses and spaced en/em dashes into spoken pauses;
-- newline merging and removal of leading list markers such as `-`, `*`, `+`, `•`, `▪`, `‣`, `◦`, and `·`;
-- collapse of repeated punctuation;
-- whitespace and punctuation-spacing cleanup;
-- insertion of a final period for longer text without terminal punctuation.
+- chuẩn hóa Unicode NFC;
+- thay thế hoặc xóa non-breaking space, ký tự zero-width và ký tự BOM;
+- chuyển dấu ba chấm và en/em dash có khoảng trắng thành nhịp nghỉ khi đọc;
+- nối dòng và xóa ký hiệu danh sách đầu dòng như `-`, `*`, `+`, `•`, `▪`, `‣`, `◦` và `·`;
+- thu gọn dấu câu lặp;
+- làm sạch khoảng trắng và khoảng cách quanh dấu câu;
+- thêm dấu chấm cuối cho văn bản dài chưa có dấu kết thúc.
 
-### 2. Vietnamese lexical normalization
+### 2. Chuẩn hóa từ vựng tiếng Việt
 
-After pronunciation overrides, `_normalize_gwen_text()` runs one of two paths:
+Sau khi áp dụng quy tắc phát âm, `_normalize_gwen_text()` chạy một trong hai nhánh:
 
-- **`sea-g2p` path:** if `sea_g2p.Normalizer(lang="vi")` loads and succeeds, its output is used and `<en>` tags are removed. The integration is intended to normalize numbers, dates, abbreviations, email, and currency.
-- **Built-in fallback:** if `sea-g2p` is absent or raises an error, repository code expands validated numeric dates, numbers, selected abbreviations, and selected units.
+- **Nhánh `sea-g2p`:** nếu `sea_g2p.Normalizer(lang="vi")` tải và chạy thành công, output của nó được sử dụng sau khi xóa tag `<en>`. Integration này dùng để chuẩn hóa số, ngày, từ viết tắt, email và tiền tệ.
+- **Fallback có sẵn:** nếu thiếu `sea-g2p` hoặc xảy ra lỗi, code trong repository chuyển ngày dạng số hợp lệ, số, một số từ viết tắt và đơn vị thành cách đọc.
 
-The built-in fallback currently handles:
+Fallback có sẵn hiện xử lý:
 
-- dates in `DD/MM/YYYY`, `YYYY-MM-DD`, and month/year forms, after calendar validation;
-- integers, signed numbers, decimal forms, and grouped thousands;
-- `%`, `đ`, `VNĐ`/`VND`, `USD`, `km`, `kg`, `GB`, and `MB`;
-- `TP.HCM`, `TP.HN`, `AI`, `KPI`, `CEO`, `CTO`, `CFO`, `COO`, `CMO`, `OK`, `ID`, and `SĐT`;
-- typographic quotes, dashes, non-breaking spaces, and final punctuation spacing.
+- ngày dạng `DD/MM/YYYY`, `YYYY-MM-DD` và tháng/năm sau khi kiểm tra lịch hợp lệ;
+- số nguyên, số có dấu, số thập phân và nhóm hàng nghìn;
+- `%`, `đ`, `VNĐ`/`VND`, `USD`, `km`, `kg`, `GB` và `MB`;
+- `TP.HCM`, `TP.HN`, `AI`, `KPI`, `CEO`, `CTO`, `CFO`, `COO`, `CMO`, `OK`, `ID` và `SĐT`;
+- dấu ngoặc kép kiểu chữ, dấu gạch ngang, non-breaking space và khoảng cách dấu câu cuối.
 
-This is a targeted normalizer, not a complete Vietnamese linguistic parser. Install `sea-g2p` for its broader normalization path, and use pronunciation overrides for project-specific terms.
+Đây là bộ chuẩn hóa có phạm vi cụ thể, không phải parser ngôn ngữ tiếng Việt hoàn chỉnh. Cài `sea-g2p` để dùng nhánh chuẩn hóa rộng hơn, đồng thời dùng quy tắc phát âm cho thuật ngữ riêng của project.
 
-## Pronunciation Control
+## Điều khiển phát âm
 
-Pronunciation rules are literal, case-sensitive `from → to` substitutions. Rules are sorted by source length and applied before `sea-g2p` or the built-in Vietnamese fallback.
+Quy tắc phát âm là phép thay thế literal `from → to`, có phân biệt chữ hoa/thường. Quy tắc được sắp xếp theo độ dài nguồn và áp dụng trước `sea-g2p` hoặc fallback tiếng Việt có sẵn.
 
 ```text
 KPI → cây pi ai
 AI  → ây ai
 ```
 
-The Studio stores rules with the latest target text in `webapp/data/user_settings.json`. Rules can be imported from UTF-8 `.json` or `.txt` files and exported as JSON.
+Studio lưu quy tắc cùng văn bản đích gần nhất trong `webapp/data/user_settings.json`. Có thể import quy tắc từ file UTF-8 `.json` hoặc `.txt` và export dưới dạng JSON.
 
-JSON accepts either form:
+JSON chấp nhận một trong hai dạng:
 
 ```json
 [
@@ -163,7 +167,7 @@ JSON accepts either form:
 }
 ```
 
-TXT accepts one pair per line using `->`, tab, `|`, or `=`. Empty lines and lines beginning with `#` are ignored.
+TXT chấp nhận một cặp trên mỗi dòng, dùng `->`, tab, `|` hoặc `=`. Dòng trống và dòng bắt đầu bằng `#` được bỏ qua.
 
 ```text
 KPI -> cây pi ai
@@ -171,15 +175,15 @@ AI|ây ai
 TP.HCM = thành phố Hồ Chí Minh
 ```
 
-Import files are limited to 512 KB. Import parses rules in the browser session; persistence occurs through the settings API.
+File import bị giới hạn 512 KB. Quá trình import phân tích quy tắc trong phiên trình duyệt; dữ liệu chỉ được lưu lâu dài qua settings API.
 
-## Voice Conditioning
+## Điều kiện hóa giọng nói
 
-### Preset voices
+### Giọng preset
 
-Each preset is a JSON record in `webapp/data/gwen_preset_voices.json` with an ID, display name, style label, WAV filename, and exact reference transcript. Audio lives under `webapp/static/voice_presets/`. Selecting a preset replaces any client-supplied transcript with the bundled transcript on the server.
+Mỗi preset là một bản ghi JSON trong `webapp/data/gwen_preset_voices.json`, gồm ID, tên hiển thị, nhãn phong cách, tên file WAV và transcript tham chiếu chính xác. Audio nằm dưới `webapp/static/voice_presets/`. Khi chọn preset, server thay transcript do client gửi bằng transcript có sẵn tương ứng.
 
-| ID | Display name | Repository style label | Bundled reference |
+| ID | Tên hiển thị | Nhãn trong repository | Tham chiếu có sẵn |
 | --- | --- | --- | --- |
 | `yen_nhi` | Yến Nhi | Tự nhiên | [`yen_nhi.wav`](webapp/static/voice_presets/yen_nhi.wav) |
 | `my_van` | Mỹ Vân | Nhẹ nhàng | [`my_van.wav`](webapp/static/voice_presets/my_van.wav) |
@@ -192,44 +196,44 @@ Each preset is a JSON record in `webapp/data/gwen_preset_voices.json` with an ID
 | `nsnd_kim_cuc` | NSND Kim Cúc | Kể chuyện | [`nsnd_kim_cuc.wav`](webapp/static/voice_presets/nsnd_kim_cuc.wav) |
 | `kha_han` | Khả Hân | Trong trẻo | [`kha_han.wav`](webapp/static/voice_presets/kha_han.wav) |
 
-These labels come from repository metadata; they are not measured speaker attributes or quality evaluations.
+Các nhãn này lấy từ metadata trong repository; chúng không phải thuộc tính người nói hoặc đánh giá chất lượng đã được đo lường.
 
-### Custom references
+### Tham chiếu tùy chỉnh
 
-Custom synthesis requires all three inputs:
+Tổng hợp tùy chỉnh cần đủ ba đầu vào:
 
 ```text
 reference_audio + exact reference_text + target text
 ```
 
-Accepted TTS upload extensions are `.wav`, `.mp3`, `.m4a`, `.flac`, and `.ogg`. Flask applies a global 32 MB request limit. The Gwen path then enforces:
+TTS chấp nhận upload `.wav`, `.mp3`, `.m4a`, `.flac` và `.ogg`. Flask áp dụng giới hạn toàn cục 32 MB cho request. Nhánh Gwen sau đó yêu cầu:
 
-- duration from 2 to 18 seconds;
-- a non-silent waveform;
-- at least 8% detected activity using a 30 ms amplitude envelope;
-- a non-empty transcript, which the caller must ensure matches the spoken reference content.
+- thời lượng từ 2 đến 18 giây;
+- waveform không im lặng;
+- tối thiểu 8% hoạt động được phát hiện bằng amplitude envelope 30 ms;
+- transcript không rỗng và caller phải đảm bảo khớp với nội dung được nói trong tham chiếu.
 
-The application recommends 3–10 seconds, one clear speaker, and little background noise. This is guidance, not a quality guarantee.
+Ứng dụng khuyến nghị 3–10 giây, một người nói rõ và ít tạp âm. Đây là hướng dẫn, không phải cam kết chất lượng.
 
-### Reference audio processing
+### Xử lý audio tham chiếu
 
-Reference handling differs by source format:
+Cách xử lý tham chiếu phụ thuộc định dạng nguồn:
 
-- Every file is decoded for validation. Multi-channel data is averaged to mono in the inspection array used for duration, peak, and activity checks.
-- A valid `.wav` file is passed to Gwen-TTS at its original path after inspection; the application does not rewrite or resample it.
-- A non-WAV file is decoded, downmixed, resampled to 24 kHz, DC-centered, peak-normalized to `0.92`, clipped to `[-1, 1]`, and written as a mono 16-bit PCM staging WAV.
-- Nearly silent files are rejected. The Gwen path validates silence density but does not trim silence from the reference.
-- Uploaded files and converted staging WAVs remain under `webapp/runtime/references/`; no automatic file-retention policy is implemented.
+- Mọi file đều được decode để kiểm tra. Dữ liệu nhiều kênh được lấy trung bình thành mono trong mảng kiểm tra thời lượng, peak và mức hoạt động.
+- File `.wav` hợp lệ được truyền cho Gwen-TTS bằng đường dẫn gốc sau khi kiểm tra; ứng dụng không ghi lại hoặc resample file này.
+- File không phải WAV được decode, downmix, resample về 24 kHz, cân bằng DC, peak-normalize về `0.92`, clip trong `[-1, 1]` và ghi thành WAV staging PCM 16-bit mono.
+- File gần như im lặng bị từ chối. Nhánh Gwen kiểm tra mật độ im lặng nhưng không cắt khoảng lặng khỏi tham chiếu.
+- File upload và WAV staging đã chuyển đổi được giữ dưới `webapp/runtime/references/`; chưa có chính sách tự động xóa file.
 
-## Gwen-TTS Integration
+## Tích hợp Gwen-TTS
 
-Default model:
+Model mặc định:
 
 ```text
 g-group-ai-lab/gwen-tts-0.6B
 ```
 
-The service imports `qwen_tts.Qwen3TTSModel` and loads the selected model through:
+Service import `qwen_tts.Qwen3TTSModel` và tải model được chọn qua:
 
 ```text
 Qwen3TTSModel.from_pretrained(
@@ -240,136 +244,136 @@ Qwen3TTSModel.from_pretrained(
 )
 ```
 
-Loading is lazy: model weights are first loaded when synthesis starts. Instances are cached in process by model ID, dtype, and requested attention backend. A lock serializes model loading. Hugging Face handles model download/cache; the repository-created `models/` directory is currently reserved and is not passed as `cache_dir`.
+Model được tải lazy khi bắt đầu lần tổng hợp đầu tiên. Instance được cache trong process theo model ID, dtype và attention backend được yêu cầu. Một lock tuần tự hóa quá trình tải model. Hugging Face quản lý tải xuống/cache model; thư mục `models/` do repository tạo hiện được để dành và không truyền làm `cache_dir`.
 
-The default attention backend is `flash_attention_2`. If loading fails with that exact selection, the service retries with `sdpa`. FlashAttention is therefore optional; SDPA is the built-in compatibility fallback.
+Attention backend mặc định là `flash_attention_2`. Nếu tải thất bại với đúng lựa chọn này, service thử lại bằng `sdpa`. Vì vậy FlashAttention là tùy chọn; SDPA là fallback tương thích có sẵn.
 
-Gwen invocation uses this compatibility sequence per chunk:
+Mỗi chunk gọi Gwen theo thứ tự tương thích:
 
-1. `generate_voice_clone(text, ref_audio, ref_text, ...)` without a language argument;
-2. retry with `language="Vietnamese"` if the installed runtime requires it;
-3. build an upstream `voice_clone_prompt` when direct `ref_audio`/`ref_text` arguments are unsupported.
+1. gọi `generate_voice_clone(text, ref_audio, ref_text, ...)` không có tham số ngôn ngữ;
+2. thử lại với `language="Vietnamese"` nếu runtime đã cài yêu cầu;
+3. tạo `voice_clone_prompt` theo upstream khi không hỗ trợ trực tiếp tham số `ref_audio`/`ref_text`.
 
-If an installed `qwen-tts` runtime rejects `speed`, the service retries without that argument and reports the fallback in the response notes.
+Nếu runtime `qwen-tts` đã cài không chấp nhận `speed`, service thử lại không có tham số đó và ghi fallback vào `notes` của response.
 
-Custom model IDs are supported by the API through `model_key=__custom__` plus `custom_model`. The value is forwarded to `from_pretrained()` and must be compatible with the installed `qwen-tts` runtime.
+API hỗ trợ model ID tùy chỉnh qua `model_key=__custom__` cùng `custom_model`. Giá trị được truyền đến `from_pretrained()` và phải tương thích với runtime `qwen-tts` đã cài.
 
-## Long-Form Synthesis and Audio Assembly
+## Tổng hợp nội dung dài và ghép audio
 
-The request limit is 5,000 characters. After all text transformations:
+Giới hạn request là 5.000 ký tự. Sau mọi bước biến đổi văn bản:
 
-- text at or below 320 characters is generated in one call;
-- longer text is split first at whitespace following `.`, `!`, `?`, `;`, or `:`;
-- an over-limit sentence is split on word boundaries;
-- chunks are synthesized sequentially with one reference voice and one model instance;
-- all returned waveforms are converted to flattened `float32` arrays;
-- adjacent waveforms are overlapped with an 80 ms linear crossfade;
-- the combined waveform is written as one WAV at the model-returned sample rate, or 24 kHz if no rate is returned.
+- văn bản tối đa 320 ký tự được sinh bằng một lần gọi;
+- văn bản dài hơn được chia trước tại khoảng trắng sau `.`, `!`, `?`, `;` hoặc `:`;
+- câu vượt giới hạn được chia theo ranh giới từ;
+- các chunk được tổng hợp tuần tự bằng cùng giọng tham chiếu và model instance;
+- mọi waveform trả về được chuyển thành mảng `float32` đã trải phẳng;
+- các waveform liền kề được chồng bằng linear crossfade 80 ms;
+- waveform tổng hợp được ghi thành một WAV ở sample rate do model trả về, hoặc 24 kHz nếu không có sample rate.
 
-Chunking reduces per-call text size and makes long requests easier to process, but the repository does not include a measured maximum duration, latency target, real-time factor, or memory profile.
+Chia chunk giảm kích thước văn bản mỗi lần gọi và giúp xử lý request dài dễ hơn. Repository chưa có số đo về thời lượng tối đa, mục tiêu độ trễ, real-time factor hoặc memory profile.
 
-## Generation Controls
+## Tham số sinh
 
-Values are clamped server-side before inference.
+Giá trị được giới hạn phía server trước inference.
 
-| Form field | Model argument | Default | Allowed range | Purpose |
+| Form field | Tham số model | Mặc định | Phạm vi | Mục đích |
 | --- | --- | ---: | --- | --- |
-| `speed` | `speed` | `1.0` | `0.7–1.3` | Requested speech-rate multiplier; may be dropped for incompatible runtimes |
-| `gwen_temperature` | `temperature` | `0.3` | `0.1–1.0` | Main generation sampling temperature |
-| `gwen_top_p` | `top_p` | `0.9` | `0.1–1.0` | Main nucleus-sampling threshold |
-| `gwen_top_k` | `top_k` | `20` | `1–100` | Main top-k sampling limit |
-| `gwen_repetition_penalty` | `repetition_penalty` | `2.0` | `1.0–3.0` | Repetition penalty |
-| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Per-call token budget |
-| `gwen_subtalker_do_sample` | `subtalker_do_sample` | `true` | boolean | Enable code-predictor sampling |
-| `gwen_subtalker_temperature` | `subtalker_temperature` | `0.1` | `0.1–1.0` | Code-predictor temperature |
-| `gwen_subtalker_top_k` | `subtalker_top_k` | `20` | `1–100` | Code-predictor top-k |
-| `gwen_subtalker_top_p` | `subtalker_top_p` | `1.0` | `0.1–1.0` | Code-predictor top-p |
+| `speed` | `speed` | `1.0` | `0.7–1.3` | Hệ số tốc độ nói yêu cầu; có thể bị bỏ với runtime không tương thích |
+| `gwen_temperature` | `temperature` | `0.3` | `0.1–1.0` | Sampling temperature của bước sinh chính |
+| `gwen_top_p` | `top_p` | `0.9` | `0.1–1.0` | Ngưỡng nucleus sampling chính |
+| `gwen_top_k` | `top_k` | `20` | `1–100` | Giới hạn top-k chính |
+| `gwen_repetition_penalty` | `repetition_penalty` | `2.0` | `1.0–3.0` | Mức phạt lặp |
+| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Token budget mỗi lần gọi |
+| `gwen_subtalker_do_sample` | `subtalker_do_sample` | `true` | boolean | Bật sampling cho code-predictor |
+| `gwen_subtalker_temperature` | `subtalker_temperature` | `0.1` | `0.1–1.0` | Temperature của code-predictor |
+| `gwen_subtalker_top_k` | `subtalker_top_k` | `20` | `1–100` | Top-k của code-predictor |
+| `gwen_subtalker_top_p` | `subtalker_top_p` | `1.0` | `0.1–1.0` | Top-p của code-predictor |
 
-The UI displays `gumbel` as the fixed code-predictor sampling method, but this value is not forwarded in model kwargs. `seed` and `remove_silence` are parsed by the Flask request layer but are not used by the current Gwen synthesis path.
+UI hiển thị `gumbel` là phương thức sampling cố định của code-predictor nhưng không truyền giá trị này trong model kwargs. `seed` và `remove_silence` được lớp Flask request phân tích nhưng nhánh tổng hợp Gwen hiện không sử dụng.
 
-## Optional ASR
+## ASR tùy chọn
 
-ASR supports the TTS workflow but is not required for synthesis. It is disabled by default through `TTS_ENABLE_ASR=0`.
+ASR hỗ trợ quy trình TTS nhưng không bắt buộc cho tổng hợp. Tính năng bị tắt mặc định qua `TTS_ENABLE_ASR=0`.
 
-### Reference transcription with Whisper
+### Chép lời tham chiếu bằng Whisper
 
-`POST /api/tts/transcribe-reference` uses `openai/whisper-small` by default to draft a custom reference transcript. Processing:
+`POST /api/tts/transcribe-reference` mặc định dùng `openai/whisper-small` để tạo bản nháp transcript cho tham chiếu tùy chỉnh. Quy trình:
 
-1. decode and downmix audio;
-2. resample to 16 kHz;
-3. DC-center and peak-normalize;
-4. trim detected leading/trailing silence with 80 ms padding;
-5. reject post-trim audio shorter than 0.35 seconds;
-6. run a Transformers ASR pipeline with `task="transcribe"` and default language `vi`.
+1. decode và downmix audio;
+2. resample về 16 kHz;
+3. cân bằng DC và peak-normalize;
+4. cắt khoảng lặng đầu/cuối được phát hiện, giữ padding 80 ms;
+5. từ chối audio ngắn hơn 0,35 giây sau khi cắt;
+6. chạy Transformers ASR pipeline với `task="transcribe"` và ngôn ngữ mặc định `vi`.
 
-Whisper uses FP16 on CUDA and FP32 on CPU.
+Whisper dùng FP16 trên CUDA và FP32 trên CPU.
 
-### General transcription with VibeVoice-ASR
+### Chép lời tổng quát bằng VibeVoice-ASR
 
-`POST /api/asr/transcribe` and `/asr` use `microsoft/VibeVoice-ASR-HF` by default. The page supports:
+`POST /api/asr/transcribe` và `/asr` mặc định dùng `microsoft/VibeVoice-ASR-HF`. Trang hỗ trợ:
 
-- `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, and `.webm` uploads;
-- optional hotwords/context;
-- `max_new_tokens` from 2,048 to 16,384;
-- tokenizer chunks from 5 to 60 seconds;
-- `bfloat16`, `float16`, or `float32`;
-- a `system_prompt` form field that the current service accepts but does not forward to the processor/model;
-- plain text or parsed speaker/timestamp segments when returned by the processor.
+- upload `.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg` và `.webm`;
+- hotword/context tùy chọn;
+- `max_new_tokens` từ 2.048 đến 16.384;
+- tokenizer chunk từ 5 đến 60 giây;
+- `bfloat16`, `float16` hoặc `float32`;
+- form field `system_prompt` được service hiện tại chấp nhận nhưng không truyền đến processor/model;
+- văn bản thuần hoặc segment người nói/timestamp đã phân tích khi processor trả về.
 
-The backend enforces the 32 MB request limit and a 0.5-second minimum, but does not enforce the “60 minutes” duration stated in the current ASR page copy.
+Backend áp dụng giới hạn request 32 MB và thời lượng tối thiểu 0,5 giây, nhưng không áp dụng giới hạn “60 phút” đang hiển thị trong nội dung trang ASR.
 
-### Dependency boundary
+### Ranh giới dependency
 
-The checked-in Colab/Kaggle TTS profile pins `qwen-tts==0.1.1` with `transformers==4.57.3`. The VibeVoice path reports a requirement for `transformers>=5.3.0`. Because these requirements conflict, notebooks deliberately run TTS-only with ASR disabled. Use a separate environment/process for VibeVoice-ASR when dependency resolution cannot satisfy both stacks.
+Profile TTS Colab/Kaggle trong repository pin `qwen-tts==0.1.1` cùng `transformers==4.57.3`. Nhánh VibeVoice báo yêu cầu `transformers>=5.3.0`. Do các yêu cầu xung đột, notebook chủ động chỉ chạy TTS và tắt ASR. Dùng environment/process riêng cho VibeVoice-ASR khi dependency resolver không thể thỏa mãn cả hai stack.
 
 ## Web Studio
 
-| Page | Current behavior |
+| Trang | Hành vi hiện tại |
 | --- | --- |
-| `/studio/gwen` | Preset selection, target text, generation controls, pronunciation rules, async synthesis, playback/download, and searchable local history |
-| `/voices` | Search, preview, download, and select ten preset references; collect custom audio/transcript and optionally call Whisper |
-| `/asr` | VibeVoice-ASR transcription UI; route is visible only when ASR is enabled |
+| `/studio/gwen` | Chọn preset, nhập văn bản đích, chỉnh tham số sinh, quy tắc phát âm, tổng hợp async, phát/tải xuống và tìm lịch sử cục bộ |
+| `/voices` | Tìm, nghe thử, tải xuống và chọn mười preset; thu thập audio/transcript tùy chỉnh và tùy chọn gọi Whisper |
+| `/asr` | UI chép lời VibeVoice-ASR; route chỉ hiển thị khi ASR được bật |
 
-Current UI boundary: `/studio/gwen` always submits a preset voice. The custom-reference panel on `/voices` does not transfer the browser `File` object into Studio. Use `POST /api/tts/generate` for custom-reference synthesis until that browser flow is connected.
+Ranh giới UI hiện tại: `/studio/gwen` luôn submit giọng preset. Panel tham chiếu tùy chỉnh trên `/voices` không chuyển đối tượng `File` của trình duyệt sang Studio. Dùng `POST /api/tts/generate` để tổng hợp bằng tham chiếu tùy chỉnh cho đến khi luồng trình duyệt này được kết nối.
 
-Settings and history are server-local, not browser-local:
+Cài đặt và lịch sử nằm cục bộ trên server, không phải cục bộ trên trình duyệt:
 
-- text and pronunciation edits are debounced to `/api/settings/save`;
-- the last text and rules are loaded from `/api/settings/load`;
-- successful sync or async syntheses are added to a 50-item JSON history;
-- the Studio renders output duration, inference time, sample rate, chunk count, model, voice, playback, and download controls.
+- thay đổi văn bản và phát âm được debounce đến `/api/settings/save`;
+- văn bản và quy tắc gần nhất được tải từ `/api/settings/load`;
+- kết quả tổng hợp sync hoặc async thành công được thêm vào lịch sử JSON tối đa 50 mục;
+- Studio hiển thị thời lượng output, thời gian inference, sample rate, số chunk, model, giọng, điều khiển phát và tải xuống.
 
-## Synchronous and Asynchronous Generation
+## Tổng hợp đồng bộ và bất đồng bộ
 
-`POST /api/tts/generate` supports both modes.
+`POST /api/tts/generate` hỗ trợ cả hai chế độ.
 
 ```text
-Synchronous
-request → synthesis on request thread → 200 result
+Đồng bộ
+request → tổng hợp trên request thread → kết quả 200
 
-Asynchronous
-request → in-memory job record → 202 + job_id
-        → single background thread → poll status → result
+Bất đồng bộ
+request → job record trong bộ nhớ → 202 + job_id
+        → một background thread → poll trạng thái → kết quả
 ```
 
-- Set `async=1` to force background execution.
-- Set `async=0` to force synchronous execution.
-- If omitted, requests carrying `CF-Connecting-IP` or `CF-Ray` default to async; other requests default to sync.
-- The current Studio always sends `async=1` and polls every 1.5 seconds.
-- `TTSJobManager` uses one `ThreadPoolExecutor` worker. Jobs and status are process-local, not distributed or durable.
-- Job metadata is purged one hour after its last update. Generated WAVs are not purged with job metadata.
+- Đặt `async=1` để buộc chạy nền.
+- Đặt `async=0` để buộc chạy đồng bộ.
+- Nếu bỏ qua, request có `CF-Connecting-IP` hoặc `CF-Ray` mặc định chạy async; request khác mặc định chạy sync.
+- Studio hiện luôn gửi `async=1` và poll mỗi 1,5 giây.
+- `TTSJobManager` dùng một worker `ThreadPoolExecutor`. Job và trạng thái chỉ tồn tại trong process, không phân tán hoặc durable.
+- Metadata job bị xóa một giờ sau lần cập nhật cuối. WAV đã sinh không bị xóa cùng metadata job.
 
 ## API
 
-### Engine status
+### Trạng thái engine
 
 ```http
 GET /api/tts/status
 ```
 
-Returns engine readiness, model metadata, CUDA/CPU summary, and ASR enablement.
+Trả về trạng thái sẵn sàng của engine, metadata model, tóm tắt CUDA/CPU và trạng thái bật ASR.
 
-### Preset synthesis
+### Tổng hợp bằng preset
 
 ```bash
 curl -X POST http://127.0.0.1:8386/api/tts/generate \
@@ -378,7 +382,7 @@ curl -X POST http://127.0.0.1:8386/api/tts/generate \
   -F 'async=0'
 ```
 
-### Custom reference-conditioned synthesis
+### Tổng hợp có điều kiện tham chiếu tùy chỉnh
 
 ```bash
 curl -X POST http://127.0.0.1:8386/api/tts/generate \
@@ -388,7 +392,7 @@ curl -X POST http://127.0.0.1:8386/api/tts/generate \
   -F 'async=0'
 ```
 
-A successful synchronous response includes stable fields such as:
+Response đồng bộ thành công gồm các field ổn định như:
 
 ```json
 {
@@ -402,9 +406,9 @@ A successful synchronous response includes stable fields such as:
 }
 ```
 
-The full payload also reports numeric `sample_rate`, `duration_seconds`, `inference_seconds`, and `chunk_count` values measured for that request.
+Payload đầy đủ còn báo các giá trị số `sample_rate`, `duration_seconds`, `inference_seconds` và `chunk_count` đo được cho request đó.
 
-### Async job polling
+### Polling job async
 
 ```bash
 JOB_ID="$(
@@ -418,43 +422,43 @@ JOB_ID="$(
 curl -sS "http://127.0.0.1:8386/api/tts/jobs/${JOB_ID}"
 ```
 
-Job responses use `queued`, `running`, `completed`, or `failed`. Completed responses place the synthesis payload under `result`.
+Job response dùng `queued`, `running`, `completed` hoặc `failed`. Response hoàn tất đặt payload tổng hợp dưới `result`.
 
-### Supporting endpoints
+### Endpoint hỗ trợ
 
-| Method | Route | Purpose |
+| Method | Route | Mục đích |
 | --- | --- | --- |
-| `GET` | `/outputs/<filename>` | Serve a generated audio file inline |
-| `GET` | `/api/history` | Return up to 50 persisted synthesis entries |
-| `GET` | `/api/settings/load` | Load pronunciation rules and latest text |
-| `POST` | `/api/settings/save` | Persist pronunciation rules and latest text |
-| `POST` | `/api/pronunciation/upload` | Parse `.json` or `.txt` pronunciation rules |
-| `POST` | `/api/pronunciation/export` | Download rules as JSON |
-| `POST` | `/api/tts/transcribe-reference` | Optional Whisper reference transcription |
-| `POST` | `/api/asr/transcribe` | Optional VibeVoice-ASR transcription |
+| `GET` | `/outputs/<filename>` | Phục vụ trực tiếp file audio đã sinh |
+| `GET` | `/api/history` | Trả về tối đa 50 mục lịch sử đã lưu |
+| `GET` | `/api/settings/load` | Tải quy tắc phát âm và văn bản gần nhất |
+| `POST` | `/api/settings/save` | Lưu quy tắc phát âm và văn bản gần nhất |
+| `POST` | `/api/pronunciation/upload` | Phân tích quy tắc phát âm `.json` hoặc `.txt` |
+| `POST` | `/api/pronunciation/export` | Tải quy tắc xuống dạng JSON |
+| `POST` | `/api/tts/transcribe-reference` | Chép lời tham chiếu bằng Whisper tùy chọn |
+| `POST` | `/api/asr/transcribe` | Chép lời bằng VibeVoice-ASR tùy chọn |
 
-## Requirements
+## Yêu cầu
 
-### Software
+### Phần mềm
 
-- Python 3. No minimum minor version is declared; checked-in hosted notebooks use Python 3.12 metadata. Compatibility outside that profile is not tested in the repository.
-- Linux is the documented runtime in the notebooks.
-- `ffmpeg`, `libsndfile1`, and `espeak-ng` are installed by the hosted notebook setup.
-- Base packages from `requirements.txt`: Flask, librosa, NumPy, and SoundFile.
-- A CUDA-compatible PyTorch build plus the `qwen-tts` runtime for synthesis.
-- Internet access on first model use unless model files already exist in the Hugging Face cache.
+- Python 3. Chưa khai báo minor version tối thiểu; notebook hosted trong repository dùng metadata Python 3.12. Repository chưa kiểm tra khả năng tương thích ngoài profile này.
+- Linux là runtime được mô tả trong notebook.
+- Thiết lập notebook hosted cài `ffmpeg`, `libsndfile1` và `espeak-ng`.
+- Package nền từ `requirements.txt`: Flask, librosa, NumPy và SoundFile.
+- Bản PyTorch tương thích CUDA cùng runtime `qwen-tts` để tổng hợp.
+- Kết nối Internet ở lần dùng model đầu nếu file model chưa có trong Hugging Face cache.
 
-### Hardware
+### Phần cứng
 
-- The current local Gwen loader requires `torch.cuda.is_available()` and binds the model to `cuda:0`. CPU-only TTS is rejected.
-- Supported configured dtypes are `bfloat16`, `float16`, and `float32`; default is `bfloat16`.
-- FlashAttention is not mandatory because the loader can retry with SDPA.
-- Whisper and VibeVoice ASR can select CPU when CUDA is unavailable, although CPU performance is not benchmarked here.
-- No reproducible VRAM requirement, latency target, or supported GPU matrix is included in the repository.
+- Gwen loader cục bộ hiện yêu cầu `torch.cuda.is_available()` và gắn model vào `cuda:0`. TTS chỉ dùng CPU bị từ chối.
+- Dtype có thể cấu hình gồm `bfloat16`, `float16` và `float32`; mặc định là `bfloat16`.
+- FlashAttention không bắt buộc vì loader có thể thử lại bằng SDPA.
+- Whisper và VibeVoice ASR có thể chọn CPU khi không có CUDA, nhưng hiệu năng CPU chưa được benchmark.
+- Repository chưa có yêu cầu VRAM, mục tiêu độ trễ hoặc ma trận GPU hỗ trợ có thể tái lập.
 
-## Installation
+## Cài đặt
 
-### 1. Clone and create an environment
+### 1. Clone và tạo environment
 
 ```bash
 git clone https://github.com/sin0235/vietnamese-tts-studio.git
@@ -464,35 +468,35 @@ source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 ```
 
-### 2. Install system audio tools on Debian/Ubuntu
+### 2. Cài công cụ audio hệ thống trên Debian/Ubuntu
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y ffmpeg libsndfile1 espeak-ng
 ```
 
-Use equivalent packages on other operating systems.
+Dùng package tương đương trên hệ điều hành khác.
 
-### 3. Install base application dependencies
+### 3. Cài dependency nền của ứng dụng
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 4. Install a CUDA PyTorch build
+### 4. Cài bản PyTorch hỗ trợ CUDA
 
-Select a build matching the installed NVIDIA driver from the [PyTorch installation guide](https://pytorch.org/get-started/locally/). The checked-in Colab/Kaggle profile currently uses:
+Chọn bản phù hợp với NVIDIA driver đã cài theo [hướng dẫn cài PyTorch](https://pytorch.org/get-started/locally/). Profile Colab/Kaggle trong repository hiện dùng:
 
 ```bash
 python -m pip install torch==2.11.0 torchaudio==2.11.0 \
   --index-url https://download.pytorch.org/whl/cu128
 ```
 
-That profile is repository evidence, not a universal CUDA recommendation.
+Profile này là bằng chứng từ repository, không phải khuyến nghị CUDA áp dụng cho mọi hệ thống.
 
-### 5. Install the TTS-only runtime
+### 5. Cài runtime chỉ dành cho TTS
 
-The hosted notebooks define this dependency set:
+Notebook hosted định nghĩa tập dependency sau:
 
 ```bash
 python -m pip install \
@@ -506,77 +510,77 @@ python -m pip install \
 python -m pip install qwen-tts==0.1.1 --no-deps
 ```
 
-`requirements.txt` intentionally contains only web/audio dependencies. PyTorch and Gwen dependencies remain separate because their versions depend on the CUDA/runtime profile. The repository has no single lock file for all local environments.
+`requirements.txt` chủ động chỉ chứa dependency web/audio. Dependency PyTorch và Gwen được tách riêng vì phiên bản phụ thuộc profile CUDA/runtime. Repository chưa có một lock file duy nhất cho mọi environment cục bộ.
 
-### 6. Verify CUDA and imports
+### 6. Kiểm tra CUDA và import
 
 ```bash
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)"
 python -c "import qwen_tts, sea_g2p; print('Gwen-TTS runtime ready')"
 ```
 
-`torch.cuda.is_available()` must print `True` for TTS.
+`torch.cuda.is_available()` phải in `True` để chạy TTS.
 
-### 7. Start the application
+### 7. Khởi động ứng dụng
 
 ```bash
 python webapp/app.py
 ```
 
-Open `http://127.0.0.1:8386/studio/gwen`.
+Mở `http://127.0.0.1:8386/studio/gwen`.
 
-### Optional ASR environment
+### Environment ASR tùy chọn
 
-For Whisper reference transcription, enable ASR after installing its Transformers stack:
+Để chép lời tham chiếu bằng Whisper, bật ASR sau khi cài Transformers stack:
 
 ```bash
 python -m pip install -U transformers accelerate sentencepiece
 TTS_ENABLE_ASR=1 python webapp/app.py
 ```
 
-VibeVoice-ASR may require `transformers>=5.3.0`, which conflicts with the checked-in `qwen-tts==0.1.1` profile. Prefer a separate ASR environment rather than replacing the working TTS dependency set in place.
+VibeVoice-ASR có thể yêu cầu `transformers>=5.3.0`, xung đột với profile `qwen-tts==0.1.1` trong repository. Nên dùng environment ASR riêng thay vì thay thế dependency TTS đang hoạt động tại chỗ.
 
-## Usage
+## Sử dụng
 
 ### Web Studio
 
-1. Open `/studio/gwen`.
-2. Select one of the ten preset voices and optionally preview its reference.
-3. Enter up to 5,000 characters of Vietnamese text.
-4. Adjust generation or pronunciation settings when needed.
-5. Select **Chuyển Đổi**. The UI queues one local job and polls until completion.
-6. Play, seek, download, or copy the generated WAV URL; previous successful runs appear in history.
+1. Mở `/studio/gwen`.
+2. Chọn một trong mười giọng preset và nghe thử tham chiếu nếu cần.
+3. Nhập tối đa 5.000 ký tự tiếng Việt.
+4. Điều chỉnh tham số sinh hoặc quy tắc phát âm khi cần.
+5. Chọn **Chuyển Đổi**. UI đưa một job cục bộ vào hàng đợi và poll đến khi hoàn tất.
+6. Phát, tua, tải xuống hoặc sao chép URL WAV đã sinh; các lần chạy thành công trước đó xuất hiện trong lịch sử.
 
-### Custom reference through API
+### Tham chiếu tùy chỉnh qua API
 
-Use the custom `curl` example above with a 2–18 second reference and its exact transcript. If ASR is enabled, `/voices` can draft the transcript with Whisper; manually verify it before synthesis.
+Dùng ví dụ `curl` tùy chỉnh ở trên với tham chiếu dài 2–18 giây và transcript chính xác. Nếu ASR được bật, `/voices` có thể tạo bản nháp transcript bằng Whisper; cần kiểm tra thủ công trước khi tổng hợp.
 
-### Colab and Kaggle notebooks
+### Notebook Colab và Kaggle
 
-- `colab_tts_cloudflare.ipynb` installs the TTS-only profile, runs Flask, opens a Cloudflare Quick Tunnel, and can sync generated/reference/data directories to Google Drive.
-- `kaggle_tts_cloudflare.ipynb` provides the analogous workflow with backup under `/kaggle/working/tts_backup/`.
+- `colab_tts_cloudflare.ipynb` cài profile chỉ dành cho TTS, chạy Flask, mở Cloudflare Quick Tunnel và có thể đồng bộ thư mục generated/reference/data lên Google Drive.
+- `kaggle_tts_cloudflare.ipynb` cung cấp quy trình tương tự với bản sao lưu dưới `/kaggle/working/tts_backup/`.
 
-Both notebooks currently hard-code the former URL `https://github.com/sin0235/text2speech.git`. Change `REPO_URL` to `https://github.com/sin0235/vietnamese-tts-studio.git` before running them from a fresh session.
+Cả hai notebook hiện hard-code URL cũ `https://github.com/sin0235/text2speech.git`. Đổi `REPO_URL` thành `https://github.com/sin0235/vietnamese-tts-studio.git` trước khi chạy từ phiên mới.
 
-## Configuration
+## Cấu hình
 
 ### Web server
 
-| Variable | Default | Description |
+| Biến | Mặc định | Mô tả |
 | --- | --- | --- |
-| `TTS_WEBAPP_HOST` | `0.0.0.0` | Flask bind host |
-| `TTS_WEBAPP_PORT` | `8386` | Flask port; invalid values fall back to `8386` |
-| `TTS_WEBAPP_DEBUG` | `0` | Enable Flask debug for `1`, `true`, `yes`, or `on` |
-| `TTS_WEBAPP_RELOADER` | `0` | Enable Flask reloader using the same truthy values |
+| `TTS_WEBAPP_HOST` | `0.0.0.0` | Host Flask bind |
+| `TTS_WEBAPP_PORT` | `8386` | Cổng Flask; giá trị không hợp lệ fallback về `8386` |
+| `TTS_WEBAPP_DEBUG` | `0` | Bật Flask debug với `1`, `true`, `yes` hoặc `on` |
+| `TTS_WEBAPP_RELOADER` | `0` | Bật Flask reloader với cùng các giá trị truthy |
 
 ### Gwen-TTS
 
-| Variable | Default | Description |
+| Biến | Mặc định | Mô tả |
 | --- | --- | --- |
-| `GWEN_MODEL_ID` | `g-group-ai-lab/gwen-tts-0.6B` | Default `from_pretrained()` model ID |
-| `GWEN_MODEL_CHOICES` | empty | Semicolon/newline-separated `Label=model-id` choices exposed in service metadata; current Studio does not render a model selector |
-| `GWEN_DTYPE` | `bfloat16` | `bfloat16`, `float16`, or `float32` |
-| `GWEN_ATTN_IMPLEMENTATION` | `flash_attention_2` | Requested attention backend; exact FlashAttention selection can fall back to `sdpa` |
+| `GWEN_MODEL_ID` | `g-group-ai-lab/gwen-tts-0.6B` | Model ID mặc định cho `from_pretrained()` |
+| `GWEN_MODEL_CHOICES` | rỗng | Các lựa chọn `Label=model-id` phân cách bằng dấu chấm phẩy/dòng mới trong service metadata; Studio hiện không render model selector |
+| `GWEN_DTYPE` | `bfloat16` | `bfloat16`, `float16` hoặc `float32` |
+| `GWEN_ATTN_IMPLEMENTATION` | `flash_attention_2` | Attention backend được yêu cầu; lựa chọn FlashAttention chính xác có thể fallback về `sdpa` |
 
 ```bash
 GWEN_DTYPE=float16 \
@@ -587,111 +591,112 @@ python webapp/app.py
 
 ### ASR
 
-| Variable | Default | Description |
+| Biến | Mặc định | Mô tả |
 | --- | --- | --- |
-| `TTS_ENABLE_ASR` | `0` | Enable Whisper and VibeVoice-ASR routes/UI |
-| `ASR_MODEL_ID` | `openai/whisper-small` | Reference-transcription model |
-| `ASR_LANGUAGE` | `vi` | Whisper generation language |
-| `ASR_CHUNK_LENGTH_S` | `18` | Whisper chunk size, clamped to 8–30 seconds |
-| `VIBEVOICE_ASR_MODEL_ID` | `microsoft/VibeVoice-ASR-HF` | General transcription model |
+| `TTS_ENABLE_ASR` | `0` | Bật route/UI Whisper và VibeVoice-ASR |
+| `ASR_MODEL_ID` | `openai/whisper-small` | Model chép lời tham chiếu |
+| `ASR_LANGUAGE` | `vi` | Ngôn ngữ sinh Whisper |
+| `ASR_CHUNK_LENGTH_S` | `18` | Kích thước chunk Whisper, giới hạn 8–30 giây |
+| `VIBEVOICE_ASR_MODEL_ID` | `microsoft/VibeVoice-ASR-HF` | Model chép lời tổng quát |
 
-## Runtime Data and Privacy
+## Dữ liệu runtime và quyền riêng tư
 
-`TTSStudioService` creates these directories when the application is imported:
-
-```text
-webapp/runtime/references/   Uploaded and converted reference recordings
-webapp/runtime/generated/    Generated WAV files
-models/                      Reserved local directory; not the configured Hugging Face cache
-```
-
-Additional files are created on demand:
+`TTSStudioService` tạo các thư mục sau khi ứng dụng được import:
 
 ```text
-webapp/data/user_settings.json   Latest text and pronunciation rules
-webapp/data/tts_history.json     Up to 50 successful synthesis records
+webapp/runtime/references/   Bản ghi tham chiếu đã tải lên và chuyển đổi
+webapp/runtime/generated/    File WAV đã sinh
+models/                      Thư mục cục bộ để dành; không phải Hugging Face cache đã cấu hình
 ```
 
-Model weights use the default Hugging Face cache unless external environment configuration changes it. In-process job state is memory-only and disappears when Flask restarts; generated and reference files remain on disk.
+Các file sau được tạo khi cần:
 
-Reference recordings, transcripts, target text, and generated speech may be sensitive. Current code provides no authentication, tenant isolation, encryption layer, automatic cleanup, or access-control policy. Do not expose the Flask server or notebook Cloudflare tunnel to untrusted users. Keep runtime audio and generated JSON state out of commits and backups unless sharing is intentional and authorized. No `.gitignore` is currently checked in, so this exclusion must be enforced manually.
+```text
+webapp/data/user_settings.json   Văn bản và quy tắc phát âm gần nhất
+webapp/data/tts_history.json     Tối đa 50 bản ghi tổng hợp thành công
+```
 
-## Project Structure
+Model weight dùng Hugging Face cache mặc định trừ khi cấu hình environment bên ngoài thay đổi. Trạng thái job trong process chỉ nằm trong bộ nhớ và mất khi Flask khởi động lại; file tham chiếu và file đã sinh vẫn còn trên đĩa.
+
+Bản ghi tham chiếu, transcript, văn bản đích và tiếng nói được sinh có thể là dữ liệu nhạy cảm. Code hiện tại không có authentication, tenant isolation, lớp mã hóa, tự động dọn dẹp hoặc chính sách access control. Không mở Flask server hoặc Cloudflare tunnel trong notebook cho người dùng không tin cậy. Không commit hoặc sao lưu audio runtime và trạng thái JSON trừ khi việc chia sẻ là chủ đích và được cho phép. Repository hiện không có `.gitignore`, nên cần tự kiểm soát việc loại trừ này.
+
+## Cấu trúc project
 
 ```text
 vietnamese-tts-studio/
 ├── webapp/
-│   ├── app.py                         # Flask routes, persistence, and in-process jobs
-│   ├── tts_service.py                 # Text/audio processing, Gwen-TTS, and ASR
+│   ├── app.py                         # Flask routes, persistence và job trong process
+│   ├── tts_service.py                 # Xử lý text/audio, Gwen-TTS và ASR
 │   ├── data/
-│   │   └── gwen_preset_voices.json   # Preset metadata and reference transcripts
+│   │   └── gwen_preset_voices.json   # Metadata preset và transcript tham chiếu
 │   ├── static/
-│   │   ├── css/style.css             # Responsive Studio/Voices/ASR presentation
-│   │   ├── images/                   # Project branding assets
-│   │   └── voice_presets/            # Ten bundled reference WAVs
+│   │   ├── css/style.css             # Giao diện responsive Studio/Voices/ASR
+│   │   ├── images/                   # Asset nhận diện project
+│   │   └── voice_presets/            # Mười WAV tham chiếu có sẵn
 │   ├── templates/
-│   │   ├── studio_engine.html        # Active preset TTS Studio
-│   │   ├── voices.html               # Preset browser and custom-reference helper
-│   │   └── asr.html                  # Optional VibeVoice-ASR page
-│   └── runtime/                       # Created locally; references and generated WAVs
-├── tests/                             # unittest API/helper coverage with mocked inference
-├── colab_tts_cloudflare.ipynb         # Colab install, runtime, tunnel, and backup flow
-├── kaggle_tts_cloudflare.ipynb        # Kaggle install, runtime, tunnel, and backup flow
-├── requirements.txt                   # Base Flask/audio dependencies
-└── README.md
+│   │   ├── studio_engine.html        # TTS Studio dùng preset hiện tại
+│   │   ├── voices.html               # Trình duyệt preset và trợ giúp tham chiếu tùy chỉnh
+│   │   └── asr.html                  # Trang VibeVoice-ASR tùy chọn
+│   └── runtime/                       # Tạo cục bộ; tham chiếu và WAV đã sinh
+├── tests/                             # unittest API/helper với inference mock
+├── colab_tts_cloudflare.ipynb         # Cài đặt Colab, runtime, tunnel và backup
+├── kaggle_tts_cloudflare.ipynb        # Cài đặt Kaggle, runtime, tunnel và backup
+├── requirements.txt                   # Dependency Flask/audio nền
+├── README.en.md                       # Tài liệu tiếng Anh
+└── README.md                          # Tài liệu tiếng Việt mặc định
 ```
 
-`home.html`, `about.html`, and `scraper.html` also remain under `webapp/templates/`, but current Flask routes do not render them.
+`home.html`, `about.html` và `scraper.html` vẫn tồn tại dưới `webapp/templates/`, nhưng Flask route hiện tại không render chúng.
 
-## Testing
+## Kiểm thử
 
-Run the repository test suite with base dependencies installed:
+Chạy test suite của repository sau khi cài dependency nền:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Tests cover:
+Test bao phủ:
 
-- Flask routing, JSON errors, upload limits, ASR gating, preset submission, and async job status;
-- text cleanup, Vietnamese number/date/abbreviation fallback behavior, pronunciation rules, and parameter clamping;
-- preset metadata resolution, reference normalization/validation, direct Gwen call selection, language fallback, and sequential chunk calls;
-- attention/import error messages and CUDA readiness checks.
+- Flask routing, lỗi JSON, giới hạn upload, ASR gating, submit preset và trạng thái job async;
+- làm sạch văn bản, fallback cho số/ngày/từ viết tắt tiếng Việt, quy tắc phát âm và giới hạn tham số;
+- phân giải metadata preset, chuẩn hóa/kiểm tra tham chiếu, chọn lệnh gọi Gwen trực tiếp, fallback ngôn ngữ và gọi chunk tuần tự;
+- thông báo lỗi attention/import và kiểm tra trạng thái CUDA.
 
-Gwen and ASR inference are mocked. Tests do not download model weights, execute real CUDA synthesis, validate acoustic quality, or exercise a full VibeVoice-ASR run.
+Gwen và ASR inference được mock. Test không tải model weight, chạy tổng hợp CUDA thật, đánh giá chất lượng âm thanh hoặc chạy VibeVoice-ASR đầy đủ.
 
-## Demo and Evaluation Status
+## Trạng thái demo và đánh giá
 
-The repository includes ten playable preset WAVs and a functional browser output player. These assets demonstrate reference selection and end-to-end application behavior; they are not a formal speech-quality evaluation.
+Repository có mười WAV preset có thể nghe và trình phát output hoạt động trên trình duyệt. Các asset này minh họa việc chọn tham chiếu và hành vi ứng dụng đầu cuối; chúng không phải đánh giá chất lượng tiếng nói chính thức.
 
-No reproducible MOS, speaker-similarity, CER/WER, intelligibility, naturalness, latency, real-time factor, or VRAM benchmark is currently included. The project focuses on application-level synthesis and integration rather than quantitative TTS evaluation.
+Hiện chưa có benchmark MOS, độ tương đồng người nói, CER/WER, độ dễ hiểu, độ tự nhiên, độ trễ, real-time factor hoặc VRAM có thể tái lập. Project tập trung vào tổng hợp và tích hợp ở tầng ứng dụng thay vì đánh giá TTS định lượng.
 
-## Limitations
+## Hạn chế
 
-- Local Gwen-TTS is hard-bound to one CUDA GPU (`cuda:0`); CPU-only TTS is unavailable.
-- Synthesis is non-streaming. Clients receive a complete WAV after all chunks finish.
-- Background jobs use one process-local worker with no durable queue, cancellation, retry policy, or multi-instance coordination.
-- The browser Studio currently exposes presets only; custom reference synthesis requires direct API use.
-- VibeVoice-ASR and the pinned TTS notebook profile require incompatible Transformers versions.
-- Reference and generated audio are retained indefinitely unless removed manually.
-- Flask routes have no authentication, rate limiting, API keys, or anti-impersonation controls.
-- Voice similarity and pronunciation depend on reference quality and transcript accuracy; no formal benchmark is provided.
-- Local dependencies are not fully locked outside the hosted notebook profile.
+- Gwen-TTS cục bộ gắn cố định vào một GPU CUDA (`cuda:0`); không hỗ trợ TTS chỉ dùng CPU.
+- Quá trình tổng hợp không streaming. Client nhận WAV hoàn chỉnh sau khi mọi chunk hoàn tất.
+- Job nền dùng một worker cục bộ trong process, không có hàng đợi durable, hủy job, retry policy hoặc điều phối nhiều instance.
+- Studio trên trình duyệt hiện chỉ cung cấp preset; tổng hợp bằng tham chiếu tùy chỉnh cần gọi API trực tiếp.
+- VibeVoice-ASR và profile TTS notebook đã pin yêu cầu các phiên bản Transformers không tương thích.
+- Audio tham chiếu và audio đã sinh được giữ vô thời hạn nếu không xóa thủ công.
+- Flask route không có authentication, rate limiting, API key hoặc biện pháp chống mạo danh.
+- Độ tương đồng giọng và phát âm phụ thuộc chất lượng tham chiếu cùng độ chính xác transcript; chưa có benchmark chính thức.
+- Dependency cục bộ chưa được lock đầy đủ ngoài profile notebook hosted.
 
-## Future Improvements
+## Hướng phát triển
 
-- Connect custom reference selection directly to the Studio submission flow.
-- Separate TTS and ASR runtimes or services to remove the Transformers dependency conflict.
-- Add streaming or progressive long-form synthesis and explicit job cancellation.
-- Move jobs to a durable worker backend and add retention controls for audio/state.
-- Add authenticated deployment profiles, API authorization, and abuse safeguards.
-- Publish reproducible MOS, speaker-similarity, intelligibility, latency, and memory evaluations.
-- Add tested container/runtime profiles and broader Vietnamese pronunciation dictionaries.
+- Kết nối lựa chọn tham chiếu tùy chỉnh trực tiếp vào luồng submit của Studio.
+- Tách runtime hoặc service TTS và ASR để loại bỏ xung đột dependency Transformers.
+- Thêm streaming hoặc tổng hợp nội dung dài dạng lũy tiến và hủy job rõ ràng.
+- Chuyển job sang worker backend durable và thêm cơ chế lưu giữ/xóa audio cùng trạng thái.
+- Thêm deployment profile có authentication, API authorization và biện pháp chống lạm dụng.
+- Công bố đánh giá MOS, độ tương đồng người nói, độ dễ hiểu, độ trễ và bộ nhớ có thể tái lập.
+- Thêm profile container/runtime đã kiểm tra và từ điển phát âm tiếng Việt rộng hơn.
 
-## Responsible Use
+## Sử dụng có trách nhiệm
 
-Use only voices and recordings for which you have explicit rights or consent. Do not use generated audio to impersonate, defraud, harass, or misrepresent another person. Review transcripts and outputs before publication, especially when ASR is used to draft reference text.
+Chỉ sử dụng giọng và bản ghi khi có quyền hoặc sự đồng ý rõ ràng. Không dùng audio được sinh để mạo danh, lừa đảo, quấy rối hoặc xuyên tạc người khác. Kiểm tra transcript và output trước khi công bố, đặc biệt khi dùng ASR để tạo bản nháp văn bản tham chiếu.
 
-## License
+## Giấy phép
 
-No license file is currently included in this repository. Until the owner adds one, the source and bundled voice assets should not be assumed to grant reuse, redistribution, or commercial-use rights.
+Repository hiện chưa có file giấy phép. Cho đến khi chủ sở hữu bổ sung, không nên giả định source và asset giọng nói có sẵn cho phép tái sử dụng, phân phối lại hoặc sử dụng thương mại.
