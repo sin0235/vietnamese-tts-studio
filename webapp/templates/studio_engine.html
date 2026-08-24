@@ -1251,9 +1251,15 @@
         return payload.result;
       }
 
-      updatePendingHistoryStatus(
-        payload.status === 'queued' ? 'Đang xếp hàng synthesize...' : 'Đang sinh giọng nói...'
-      );
+            let pendingLabel = payload.status === 'queued'
+                ? 'Đang xếp hàng synthesize...'
+                : 'Đang sinh giọng nói...';
+            if (payload.status === 'queued' && Number.isInteger(payload.queue_position)) {
+                pendingLabel = `Đang chờ, vị trí ${payload.queue_position}...`;
+            } else if (payload.status === 'running' && Number.isInteger(payload.gpu_index)) {
+                pendingLabel = `Đang sinh trên GPU ${payload.gpu_index}...`;
+            }
+            updatePendingHistoryStatus(pendingLabel);
       await delayWithAbort(1500, signal);
     }
   }

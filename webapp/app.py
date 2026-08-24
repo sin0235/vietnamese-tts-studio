@@ -5,18 +5,17 @@ import logging
 import os
 import re
 import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
-from datetime import datetime
+from dataclasses import asdict
 import mimetypes
 from pathlib import Path
 from threading import Lock
 from typing import Any
-from urllib.parse import quote
 
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
+
+from webapp.job_queue import QueueFullError, SQLiteJobQueue, SynthesisSubmission
+from webapp.storage import load_tts_history
 
 try:
     from webapp.tts_service import (
@@ -86,121 +85,62 @@ MAX_HISTORY_ITEMS = 50
 _storage_lock = Lock()
 
 
-@dataclass(slots=True)
-class SynthesisSubmission:
-    engine_id: str
-    text: str
-    reference_path: Path
-    reference_text: str
-    speed: float
-    remove_silence: bool
-    seed: int | None
-    model_key: str
-    custom_model: str
-    gwen_generation_config: dict[str, Any] | None
-    pronunciation_overrides: list[tuple[str, str]]
-    preset_voice: Any | None = None
-
-
 class TTSJobManager:
-    def __init__(self, *, max_workers: int = 1, retention_seconds: int = JOB_RETENTION_SECONDS) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="tts-job")
-        self._retention_seconds = retention_seconds
-        self._jobs: dict[str, dict[str, Any]] = {}
-        self._lock = Lock()
+    def __init__(self, queue: SQLiteJobQueue | None = None) -> None:
+        if queue is None:
+            queue_path = Path(
+                os.environ.get("TTS_QUEUE_DB", ROOT / "webapp" / "runtime" / "tts_jobs.sqlite3")
+            )
+            try:
+                max_pending = int(os.environ.get("TTS_QUEUE_MAX_PENDING", "32"))
+                lease_seconds = float(os.environ.get("TTS_JOB_LEASE_SECONDS", "30"))
+            except ValueError:
+                max_pending, lease_seconds = 32, 30.0
+            queue = SQLiteJobQueue(
+                queue_path,
+                max_pending=max(1, min(1024, max_pending)),
+                lease_seconds=max(3.0, min(3600.0, lease_seconds)),
+            )
+        self._queue = queue
 
     def enqueue(self, submission: SynthesisSubmission) -> str:
-        self._purge_expired()
-        now = time.time()
-        job_id = uuid.uuid4().hex
-        with self._lock:
-            self._jobs[job_id] = {
-                "id": job_id,
-                "status": "queued",
-                "created_at": now,
-                "updated_at": now,
-                "message": "Đã nhận yêu cầu. Job đang chờ worker synthesize.",
-                "result": None,
-                "error": None,
-            }
-        app.logger.info(
-            "Queued synth job: id=%s engine=%s model=%s voice=%s text_chars=%d",
-            job_id,
-            submission.engine_id,
-            submission.model_key,
-            submission.preset_voice.id if submission.preset_voice is not None else "custom",
-            len(submission.text),
-        )
-        self._executor.submit(self._run_job, job_id, submission)
-        return job_id
+        return self._queue.enqueue(submission)
 
     def get_snapshot(self, job_id: str) -> dict[str, Any] | None:
-        self._purge_expired()
-        with self._lock:
-            snapshot = self._jobs.get(job_id)
-            if snapshot is None:
-                return None
-            return dict(snapshot)
+        self._queue.purge_terminal(JOB_RETENTION_SECONDS)
+        snapshot = self._queue.get_snapshot(job_id)
+        if snapshot is None:
+            return None
+        message = {
+            "queued": "Đã nhận yêu cầu. Job đang chờ worker synthesize.",
+            "running": "Model đang synthesize trong worker GPU.",
+            "completed": "Đã synthesize xong audio.",
+            "failed": snapshot.error or "Job synthesize thất bại.",
+        }[snapshot.status]
+        return {
+            "id": snapshot.id,
+            "status": snapshot.status,
+            "created_at": snapshot.created_at,
+            "updated_at": snapshot.updated_at,
+            "message": message,
+            "result": snapshot.result,
+            "error": snapshot.error,
+            "worker_id": snapshot.worker_id,
+            "gpu_index": snapshot.gpu_index,
+            "attempts": snapshot.attempts,
+            "queue_position": self._queue.queue_position(snapshot.id),
+        }
 
-    def _purge_expired(self) -> None:
-        now = time.time()
-        with self._lock:
-            expired_ids = [
-                job_id
-                for job_id, snapshot in self._jobs.items()
-                if now - float(snapshot.get("updated_at", snapshot.get("created_at", now))) > self._retention_seconds
-            ]
-            for job_id in expired_ids:
-                self._jobs.pop(job_id, None)
-
-    def _update_job(self, job_id: str, **updates: Any) -> None:
-        with self._lock:
-            snapshot = self._jobs.get(job_id)
-            if snapshot is None:
-                return
-            snapshot.update(updates)
-            snapshot["updated_at"] = time.time()
-
-    def _run_job(self, job_id: str, submission: SynthesisSubmission) -> None:
-        self._update_job(
-            job_id,
-            status="running",
-            message="Model đang synthesize trong nền. Request đã được tách khỏi kết nối Cloudflare.",
-        )
-        app.logger.info(
-            "Running synth job: id=%s engine=%s model=%s voice=%s",
-            job_id,
-            submission.engine_id,
-            submission.model_key,
-            submission.preset_voice.id if submission.preset_voice is not None else "custom",
-        )
-        try:
-            payload = _execute_synthesis_submission(submission)
-        except TTSError as exc:
-            app.logger.warning("Synth job failed: id=%s error=%s", job_id, exc)
-            self._update_job(job_id, status="failed", error=str(exc), message=str(exc))
-            return
-        except Exception as exc:  # pragma: no cover
-            error_message = f"Lỗi không mong muốn: {exc}"
-            app.logger.exception("Synth job crashed: id=%s", job_id)
-            self._update_job(job_id, status="failed", error=error_message, message=error_message)
-            return
-
-        app.logger.info(
-            "Completed synth job: id=%s engine=%s output=%s inference_seconds=%s duration_seconds=%s",
-            job_id,
-            submission.engine_id,
-            payload.get("download_name"),
-            payload.get("inference_seconds"),
-            payload.get("duration_seconds"),
-        )
-        self._update_job(
-            job_id,
-            status="completed",
-            result=payload,
-            message="Đã synthesize xong audio.",
-            error=None,
-        )
+    def wait_for_terminal(self, job_id: str, timeout_seconds: float) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            snapshot = self.get_snapshot(job_id)
+            if snapshot is None or snapshot["status"] in {"completed", "failed"}:
+                return snapshot
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return snapshot
+            time.sleep(min(0.1, remaining))
 
 
 tts_job_manager = TTSJobManager()
@@ -321,10 +261,6 @@ def _is_api_request() -> bool:
     return request.path.startswith("/api/")
 
 
-def _audio_url_for_filename(filename: str) -> str:
-    return f"/outputs/{quote(filename)}"
-
-
 def _ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -390,48 +326,7 @@ def _save_user_settings(raw_payload: Any) -> dict[str, Any]:
 
 
 def _load_tts_history() -> list[dict[str, Any]]:
-    with _storage_lock:
-        payload = _read_json_file(TTS_HISTORY_PATH, [])
-    if not isinstance(payload, list):
-        return []
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def _append_tts_history(entry: dict[str, Any]) -> None:
-    with _storage_lock:
-        history = _read_json_file(TTS_HISTORY_PATH, [])
-        if not isinstance(history, list):
-            history = []
-        history = [item for item in history if isinstance(item, dict)]
-        history.insert(0, entry)
-        _write_json_file(TTS_HISTORY_PATH, history[:MAX_HISTORY_ITEMS])
-
-
-def _build_synthesis_payload(result, *, preset_voice: Any | None = None, input_text: str = "") -> dict[str, Any]:
-    notes = list(result.notes)
-    if preset_voice is not None:
-        notes.insert(0, f"Đã dùng preset voice Gwen: {preset_voice.name}.")
-
-    return {
-        "ok": True,
-        "engine": result.engine_id,
-        "engine_label": result.engine_label,
-        "model_key": result.model_key,
-        "model_label": result.model_label,
-        "preset_voice_id": preset_voice.id if preset_voice is not None else "",
-        "preset_voice_label": preset_voice.name if preset_voice is not None else "",
-        "audio_url": _audio_url_for_filename(result.output_path.name),
-        "download_name": result.output_path.name,
-        "sample_rate": result.sample_rate,
-        "duration_seconds": round(result.duration_seconds, 2),
-        "inference_seconds": round(result.inference_seconds, 2),
-        "chunk_count": result.chunk_count,
-        "reference_text_used": result.reference_text_used,
-        "seed": result.seed,
-        "input_text": input_text,
-        "notes": notes,
-        "storage_path": str(result.output_path.relative_to(ROOT)),
-    }
+    return load_tts_history(TTS_HISTORY_PATH)
 
 
 def _build_transcription_payload(result) -> dict[str, Any]:
@@ -518,40 +413,6 @@ def _build_synthesis_submission() -> SynthesisSubmission:
         pronunciation_overrides=pronunciation_overrides,
         preset_voice=preset_voice,
     )
-
-
-def _execute_synthesis_submission(submission: SynthesisSubmission) -> dict[str, Any]:
-    result = studio.synthesize(
-        engine_id=submission.engine_id,
-        text=submission.text,
-        reference_audio=submission.reference_path,
-        reference_text=submission.reference_text,
-        speed=submission.speed,
-        remove_silence=submission.remove_silence,
-        seed=submission.seed,
-        model_key=submission.model_key,
-        custom_model=submission.custom_model,
-        gwen_generation_config=submission.gwen_generation_config,
-        pronunciation_overrides=submission.pronunciation_overrides,
-    )
-    payload = _build_synthesis_payload(result, preset_voice=submission.preset_voice, input_text=submission.text)
-    history_entry = {
-        "id": uuid.uuid4().hex,
-        "input_text": submission.text,
-        "engine": payload.get("engine", ""),
-        "voice_id": payload.get("preset_voice_id", ""),
-        "voice_label": payload.get("preset_voice_label") or payload.get("engine_label", ""),
-        "model_label": payload.get("model_label", ""),
-        "audio_url": payload.get("audio_url", ""),
-        "download_name": payload.get("download_name", ""),
-        "duration_seconds": payload.get("duration_seconds", 0),
-        "inference_seconds": payload.get("inference_seconds", 0),
-        "sample_rate": payload.get("sample_rate", 0),
-        "chunk_count": payload.get("chunk_count", 0),
-        "created_at": datetime.now().astimezone().isoformat(),
-    }
-    _append_tts_history(history_entry)
-    return payload
 
 
 def _should_use_async_generation() -> bool:
@@ -746,8 +607,12 @@ def api_tts_generate():
     except Exception as exc:  # pragma: no cover
         return jsonify({"ok": False, "error": f"Lỗi không mong muốn: {exc}"}), 500
 
-    if _should_use_async_generation():
+    try:
         job_id = tts_job_manager.enqueue(submission)
+    except QueueFullError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 429, {"Retry-After": "2"}
+
+    if _should_use_async_generation():
         return (
             jsonify(
                 {
@@ -762,29 +627,31 @@ def api_tts_generate():
         )
 
     try:
-        app.logger.info(
-            "Running sync synth request: engine=%s model=%s voice=%s text_chars=%d",
-            submission.engine_id,
-            submission.model_key,
-            submission.preset_voice.id if submission.preset_voice is not None else "custom",
-            len(submission.text),
-        )
-        payload = _execute_synthesis_submission(submission)
-        app.logger.info(
-            "Completed sync synth request: engine=%s output=%s inference_seconds=%s duration_seconds=%s",
-            submission.engine_id,
-            payload.get("download_name"),
-            payload.get("inference_seconds"),
-            payload.get("duration_seconds"),
-        )
-    except TTSError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 422
-    except HTTPException:
-        raise
-    except Exception as exc:  # pragma: no cover
-        return jsonify({"ok": False, "error": f"Lỗi không mong muốn: {exc}"}), 500
-    return jsonify(payload)
-
+        timeout_seconds = float(os.environ.get("TTS_SYNC_WAIT_SECONDS", "120"))
+    except ValueError:
+        timeout_seconds = 120.0
+    snapshot = tts_job_manager.wait_for_terminal(
+        job_id,
+        max(1.0, min(3600.0, timeout_seconds)),
+    )
+    if snapshot is None:
+        return jsonify({"ok": False, "error": "Không tìm thấy job vừa tạo."}), 500
+    if snapshot["status"] == "completed":
+        return jsonify(snapshot["result"])
+    if snapshot["status"] == "failed":
+        return jsonify({"ok": False, "error": snapshot["error"] or snapshot["message"]}), 422
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "queued": True,
+                "job_id": job_id,
+                "status": snapshot["status"],
+                "message": "Job vẫn đang xử lý; hãy tiếp tục poll trạng thái.",
+            }
+        ),
+        202,
+    )
 
 @app.route("/api/tts/jobs/<job_id>")
 def api_tts_job_status(job_id: str):
@@ -801,6 +668,10 @@ def api_tts_job_status(job_id: str):
                 "job_id": snapshot["id"],
                 "status": status,
                 "message": snapshot["message"],
+                "queue_position": snapshot.get("queue_position"),
+                "worker_id": snapshot.get("worker_id"),
+                "gpu_index": snapshot.get("gpu_index"),
+                "attempts": snapshot.get("attempts", 0),
             }
         )
 

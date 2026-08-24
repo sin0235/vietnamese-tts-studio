@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from webapp.app import MAX_UPLOAD_MB, app, studio
+from webapp.job_queue import QueueFullError
 from webapp.tts_service import EngineCard, PresetVoice, SynthesisResult, TranscriptionResult, _normalize_tts_prompt_text
 
 
@@ -205,24 +206,23 @@ class ApiErrorHandlingTest(unittest.TestCase):
         )
 
         with patch("webapp.app.studio.get_preset_voice_reference", return_value=(preset_voice, studio.output_dir / "yen_nhi.wav")):
-            with patch("webapp.app.studio.synthesize", return_value=result):
+            with patch("webapp.app.tts_job_manager.enqueue", return_value="job-preset") as enqueue_mock:
                 response = self.client.post(
                     "/api/tts/generate",
                     data={
                         "engine": "gwen",
                         "text": "xin chao",
                         "preset_voice_id": "yen_nhi",
+                        "async": "1",
                     },
                     content_type="multipart/form-data",
                 )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         self.assertTrue(response.is_json)
-        payload = response.get_json()
-        self.assertEqual(payload["ok"], True)
-        self.assertEqual(payload["preset_voice_id"], "yen_nhi")
-        self.assertEqual(payload["preset_voice_label"], "Yến Nhi")
-        self.assertIn("Đã dùng preset voice Gwen: Yến Nhi.", payload["notes"])
+        submission = enqueue_mock.call_args.args[0]
+        self.assertEqual(submission.preset_voice.id, "yen_nhi")
+        self.assertEqual(submission.reference_path, studio.output_dir / "yen_nhi.wav")
 
     def test_generate_async_returns_job_id(self) -> None:
         preset_voice = PresetVoice(
@@ -323,7 +323,7 @@ class ApiErrorHandlingTest(unittest.TestCase):
         )
 
         with patch("webapp.app.studio.get_preset_voice_reference", return_value=(preset_voice, studio.output_dir / "yen_nhi.wav")):
-            with patch("webapp.app.studio.synthesize", return_value=result) as synthesize_mock:
+            with patch("webapp.app.tts_job_manager.enqueue", return_value="job-advanced") as enqueue_mock:
                 response = self.client.post(
                     "/api/tts/generate",
                     data={
@@ -343,19 +343,21 @@ class ApiErrorHandlingTest(unittest.TestCase):
                         "gwen_subtalker_sampling_method": "gumbel",
                         "pronunciation_from": ["AI", "KPI"],
                         "pronunciation_to": ["ây ai", "cây pi ai"],
+                        "async": "1",
                     },
                     content_type="multipart/form-data",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        kwargs = synthesize_mock.call_args.kwargs
-        self.assertEqual(kwargs["gwen_generation_config"]["speed"], 1.2)
-        self.assertEqual(kwargs["gwen_generation_config"]["temperature"], 0.4)
-        self.assertEqual(kwargs["gwen_generation_config"]["top_p"], 0.85)
-        self.assertEqual(kwargs["gwen_generation_config"]["top_k"], 42)
-        self.assertEqual(kwargs["gwen_generation_config"]["max_new_tokens"], 5000)
-        self.assertTrue(kwargs["gwen_generation_config"]["subtalker_do_sample"])
-        self.assertEqual(kwargs["pronunciation_overrides"], [("AI", "ây ai"), ("KPI", "cây pi ai")])
+        self.assertEqual(response.status_code, 202)
+        submission = enqueue_mock.call_args.args[0]
+        config = submission.gwen_generation_config
+        self.assertEqual(config["speed"], 1.2)
+        self.assertEqual(config["temperature"], 0.4)
+        self.assertEqual(config["top_p"], 0.85)
+        self.assertEqual(config["top_k"], 42)
+        self.assertEqual(config["max_new_tokens"], 5000)
+        self.assertTrue(config["subtalker_do_sample"])
+        self.assertEqual(submission.pronunciation_overrides, [("AI", "ây ai"), ("KPI", "cây pi ai")])
 
     def test_generate_oversize_upload_returns_json(self) -> None:
         response = self.client.post(
@@ -398,7 +400,7 @@ class ApiErrorHandlingTest(unittest.TestCase):
         )
 
         with patch("webapp.app.studio.get_preset_voice_reference", return_value=(preset_voice, studio.output_dir / "yen_nhi.wav")):
-            with patch("webapp.app.studio.synthesize", return_value=result) as synthesize_mock:
+            with patch("webapp.app.tts_job_manager.enqueue", return_value="job-default") as enqueue_mock:
                 response = self.client.post(
                     "/api/tts/generate",
                     data={
@@ -415,13 +417,14 @@ class ApiErrorHandlingTest(unittest.TestCase):
                         "gwen_subtalker_top_k": "20",
                         "gwen_subtalker_top_p": "1.0",
                         "gwen_subtalker_sampling_method": "gumbel",
+                        "async": "1",
                     },
                     content_type="multipart/form-data",
                 )
 
-        self.assertEqual(response.status_code, 200)
-        kwargs = synthesize_mock.call_args.kwargs
-        self.assertTrue(kwargs["gwen_generation_config"]["subtalker_do_sample"])
+        self.assertEqual(response.status_code, 202)
+        submission = enqueue_mock.call_args.args[0]
+        self.assertTrue(submission.gwen_generation_config["subtalker_do_sample"])
 
     def test_unknown_api_route_returns_json(self) -> None:
         response = self.client.get("/api/does-not-exist")
@@ -431,6 +434,72 @@ class ApiErrorHandlingTest(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["ok"], False)
         self.assertIn("URL", payload["error"])
+
+    def test_generate_returns_429_when_queue_is_full(self) -> None:
+        preset_voice = PresetVoice(
+            id="yen_nhi",
+            name="Yến Nhi",
+            avatar="YN",
+            style="Tự nhiên",
+            audio_filename="yen_nhi.wav",
+            reference_text="xin chao",
+        )
+        with patch(
+            "webapp.app.studio.get_preset_voice_reference",
+            return_value=(preset_voice, studio.output_dir / "yen_nhi.wav"),
+        ), patch(
+            "webapp.app.tts_job_manager.enqueue",
+            side_effect=QueueFullError("Hàng đợi TTS đã đầy."),
+        ):
+            response = self.client.post(
+                "/api/tts/generate",
+                data={
+                    "engine": "gwen",
+                    "text": "xin chao",
+                    "preset_voice_id": "yen_nhi",
+                    "async": "1",
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["Retry-After"], "2")
+
+    def test_sync_generation_waits_on_queue_instead_of_running_studio(self) -> None:
+        preset_voice = PresetVoice(
+            id="yen_nhi",
+            name="Yến Nhi",
+            avatar="YN",
+            style="Tự nhiên",
+            audio_filename="yen_nhi.wav",
+            reference_text="xin chao",
+        )
+        completed = {
+            "id": "job-1",
+            "status": "completed",
+            "result": {"ok": True, "download_name": "done.wav"},
+        }
+        with patch(
+            "webapp.app.studio.get_preset_voice_reference",
+            return_value=(preset_voice, studio.output_dir / "yen_nhi.wav"),
+        ), patch("webapp.app.tts_job_manager.enqueue", return_value="job-1"), patch(
+            "webapp.app.tts_job_manager.wait_for_terminal",
+            return_value=completed,
+        ), patch("webapp.app.studio.synthesize") as synthesize_mock:
+            response = self.client.post(
+                "/api/tts/generate",
+                data={
+                    "engine": "gwen",
+                    "text": "xin chao",
+                    "preset_voice_id": "yen_nhi",
+                    "async": "0",
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["download_name"], "done.wav")
+        synthesize_mock.assert_not_called()
 
 
 if __name__ == "__main__":

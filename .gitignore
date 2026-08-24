@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+webapp/runtime/
+webapp/data/tts_history.json
+webapp/data/user_settings.json
