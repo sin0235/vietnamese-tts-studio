@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,13 +17,16 @@ from webapp.tts_service import (
     TTSError,
     _apply_pronunciation_overrides,
     _build_gwen_generation_kwargs,
+    _crossfade_join,
     _format_gwen_import_error,
     _format_gwen_runtime_error,
     _map_import_name_to_package,
     _normalize_gwen_generation_config,
     _normalize_gwen_text,
+    _normalize_tts_prompt_text,
     _parse_pronunciation_overrides,
     _normalize_reference_wave,
+    _split_text_for_tts,
     TEXT_INPUT_LIMIT,
     TTSStudioService,
 )
@@ -119,6 +123,111 @@ class TTSServiceHelperTest(unittest.TestCase):
             notes,
             ["Đã chuẩn hóa ngày tháng năm viết bằng số sang cách đọc tiếng Việt tự nhiên hơn."],
         )
+
+    def test_text_preprocessing_preserves_structured_tokens(self) -> None:
+        text = (
+            "Âm 3.5 dB, tăng 12,5%. Liên hệ support@example.com "
+            "hoặc https://example.com/a?x=1&y=2."
+        )
+
+        prompt_text, _ = _normalize_tts_prompt_text(text)
+
+        class EchoNormalizer:
+            def normalize(self, value: str) -> str:
+                return value
+
+        with patch("webapp.tts_service._sea_normalizer_loaded", True):
+            with patch("webapp.tts_service._sea_normalizer_instance", EchoNormalizer()):
+                model_text, _ = _normalize_gwen_text(prompt_text)
+
+        self.assertEqual(prompt_text, text)
+        self.assertEqual(model_text, text)
+
+    def test_gwen_fallback_preserves_number_punctuation_and_decimals(self) -> None:
+        prompt_text, _ = _normalize_tts_prompt_text(
+            "Tôi có 2, bạn có 3. Giá là 1.234,56 đồng và tăng 12,5%."
+        )
+
+        with patch("webapp.tts_service._sea_normalizer_loaded", True):
+            with patch("webapp.tts_service._sea_normalizer_instance", None):
+                normalized, _ = _normalize_gwen_text(prompt_text)
+
+        self.assertEqual(
+            normalized,
+            "Tôi có hai, bạn có ba. Giá là một nghìn hai trăm ba mươi tư "
+            "phẩy năm sáu đồng và tăng mười hai phẩy năm phần trăm.",
+        )
+
+    def test_gwen_fallback_handles_identifiers_and_oversized_numbers(self) -> None:
+        oversized_number = "9" * TEXT_INPUT_LIMIT
+        cases = {
+            "SĐT 0901234567.": "số điện thoại không chín không một hai ba bốn năm sáu bảy.",
+            "Phiên bản v1.2.3, IP 192.168.1.1.": "Phiên bản v1.2.3, IP 192.168.1.1.",
+            "Mã 1000000000000000000.": "Mã 1000000000000000000.",
+            oversized_number: oversized_number + ".",
+        }
+
+        with patch("webapp.tts_service._sea_normalizer_loaded", True):
+            with patch("webapp.tts_service._sea_normalizer_instance", None):
+                for raw_text, expected in cases.items():
+                    with self.subTest(raw_text=raw_text[:40]):
+                        prompt_text, _ = _normalize_tts_prompt_text(raw_text)
+                        normalized, _ = _normalize_gwen_text(prompt_text)
+                        self.assertEqual(normalized, expected)
+
+    def test_split_text_for_tts_hard_limits_oversized_tokens(self) -> None:
+        for text in ("a" * 700, "😀" * 400):
+            with self.subTest(text_length=len(text)):
+                chunks = _split_text_for_tts(text, max_chars=320)
+                self.assertTrue(chunks)
+                self.assertTrue(all(len(chunk) <= 320 for chunk in chunks))
+                self.assertEqual("".join(chunks), text)
+
+    def test_split_text_for_tts_respects_sentence_closing_quotes(self) -> None:
+        chunks = _split_text_for_tts(
+            "Alpha beta gamma.” Delta epsilon zeta. Cuối.",
+            max_chars=30,
+        )
+
+        self.assertEqual(chunks, ["Alpha beta gamma.”", "Delta epsilon zeta. Cuối."])
+
+    def test_split_text_for_tts_avoids_tiny_final_chunk(self) -> None:
+        text = f"{'từ ' * 28}cuối. Kết."
+
+        chunks = _split_text_for_tts(text, max_chars=90)
+
+        self.assertTrue(all(len(chunk) <= 90 for chunk in chunks))
+        self.assertGreaterEqual(len(chunks[-1]), 20)
+        self.assertEqual(" ".join(chunks), re.sub(r"\s+", " ", text).strip())
+
+    def test_split_text_for_tts_does_not_start_chunk_with_combining_mark(self) -> None:
+        text = "a" * 9 + "e\u0301" + "b" * 10
+
+        chunks = _split_text_for_tts(text, max_chars=10)
+
+        self.assertEqual("".join(chunks), text)
+        self.assertTrue(all(not chunk.startswith("\u0301") for chunk in chunks))
+
+    def test_crossfade_join_does_not_overlap_active_boundaries(self) -> None:
+        active = np.ones(1000, dtype=np.float32) * 0.1
+
+        combined = _crossfade_join([active, active], sample_rate=1000, duration_ms=100)
+
+        self.assertEqual(len(combined), 2000)
+
+    def test_crossfade_join_does_not_treat_uniform_quiet_speech_as_silence(self) -> None:
+        quiet_speech = np.ones(1000, dtype=np.float32) * 0.01
+
+        combined = _crossfade_join([quiet_speech, quiet_speech], sample_rate=1000, duration_ms=100)
+
+        self.assertEqual(len(combined), 2000)
+
+    def test_crossfade_join_still_blends_quiet_boundaries(self) -> None:
+        quiet = np.zeros(1000, dtype=np.float32)
+
+        combined = _crossfade_join([quiet, quiet], sample_rate=1000, duration_ms=100)
+
+        self.assertEqual(len(combined), 1900)
 
     def test_format_gwen_import_error_mentions_package(self) -> None:
         exc = ModuleNotFoundError("No module named 'flash_attn'", name="flash_attn")
@@ -313,7 +422,7 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertTrue(output_exists)
         self.assertTrue(any("convert sang WAV mono 24kHz" in note for note in result.notes))
 
-    def test_synthesize_with_gwen_prefers_upstream_direct_call_without_language(self) -> None:
+    def test_synthesize_with_gwen_prefers_explicit_vietnamese_language(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
@@ -363,17 +472,14 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertEqual(len(fake_gwen.calls), 1)
         self.assertIn("ref_audio", fake_gwen.calls[0])
         self.assertIn("ref_text", fake_gwen.calls[0])
-        self.assertNotIn("language", fake_gwen.calls[0])
-        self.assertTrue(any("flow inference upstream" in note for note in result.notes))
+        self.assertEqual(fake_gwen.calls[0]["language"], "Vietnamese")
+        self.assertTrue(any("language=\"Vietnamese\"" in note for note in result.notes))
         self.assertTrue(any("chuẩn hóa số" in note for note in result.notes))
 
     def test_synthesize_with_gwen_calls_each_chunk_sequentially(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
-
-            def create_voice_clone_prompt(self, **_kwargs: object) -> str:
-                raise AssertionError("direct call should be used")
 
             def generate_voice_clone(self, **kwargs: object) -> tuple[list[np.ndarray], int]:
                 self.calls.append(kwargs)
@@ -418,11 +524,91 @@ class TTSServiceHelperTest(unittest.TestCase):
 
         self.assertGreater(len(fake_gwen.calls), 1)
         self.assertTrue(all(isinstance(call["text"], str) for call in fake_gwen.calls))
-        self.assertTrue(all("language" not in call for call in fake_gwen.calls))
+        self.assertTrue(all(call.get("language") == "Vietnamese" for call in fake_gwen.calls))
         self.assertEqual(result.chunk_count, len(fake_gwen.calls))
         self.assertTrue(any("gọi Gwen tuần tự" in note for note in result.notes))
 
-    def test_synthesize_with_gwen_falls_back_to_language_when_runtime_requires_it(self) -> None:
+    def test_synthesize_with_gwen_reuses_clone_prompt_for_all_chunks(self) -> None:
+        class FakeGwen:
+            def __init__(self) -> None:
+                self.prompt_calls = 0
+                self.successful_calls: list[dict[str, object]] = []
+                self.prompt = object()
+
+            def create_voice_clone_prompt(self, **_kwargs: object) -> object:
+                self.prompt_calls += 1
+                return self.prompt
+
+            def generate_voice_clone(self, **kwargs: object) -> tuple[list[np.ndarray], int]:
+                if "voice_clone_prompt" not in kwargs:
+                    raise TypeError("generate_voice_clone() got an unexpected keyword argument 'ref_audio'")
+                self.successful_calls.append(kwargs)
+                return [np.zeros(12000, dtype=np.float32)], 24000
+
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                service = TTSStudioService(Path(tmpdir))
+                fake_gwen = FakeGwen()
+                reference_audio = Path(tmpdir) / "reference.wav"
+                model_spec = service.resolve_model_spec("gwen")
+
+                with patch.object(service, "_load_gwen", return_value=fake_gwen):
+                    with patch.object(
+                        service,
+                        "_prepare_reference_audio_for_gwen",
+                        return_value=(reference_audio, 4.2, {"converted": False}),
+                    ):
+                        result = service._synthesize_with_gwen(
+                            text=" ".join(["Xin chào Gwen"] * 80),
+                            reference_audio=reference_audio,
+                            reference_text="Xin chào Gwen",
+                            model_spec=model_spec,
+                            output_path=Path(tmpdir) / "out.wav",
+                            speed=1.0,
+                        )
+
+        self.assertGreater(len(fake_gwen.successful_calls), 1)
+        self.assertEqual(fake_gwen.prompt_calls, 1)
+        self.assertTrue(
+            all(call["voice_clone_prompt"] is fake_gwen.prompt for call in fake_gwen.successful_calls)
+        )
+        self.assertTrue(any("tái sử dụng" in note for note in result.notes))
+
+    def test_synthesize_with_gwen_adapts_codec_budget_to_each_chunk(self) -> None:
+        class FakeGwen:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def generate_voice_clone(self, **kwargs: object) -> tuple[list[np.ndarray], int]:
+                self.calls.append(kwargs)
+                return [np.zeros(12000, dtype=np.float32)], 24000
+
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                service = TTSStudioService(Path(tmpdir))
+                fake_gwen = FakeGwen()
+                reference_audio = Path(tmpdir) / "reference.wav"
+                model_spec = service.resolve_model_spec("gwen")
+
+                with patch.object(service, "_load_gwen", return_value=fake_gwen):
+                    with patch.object(
+                        service,
+                        "_prepare_reference_audio_for_gwen",
+                        return_value=(reference_audio, 4.2, {"converted": False}),
+                    ):
+                        service._synthesize_with_gwen(
+                            text="a" * 321,
+                            reference_audio=reference_audio,
+                            reference_text="Xin chào Gwen",
+                            model_spec=model_spec,
+                            output_path=Path(tmpdir) / "out.wav",
+                            speed=1.0,
+                            gwen_generation_config={"max_new_tokens": 8192},
+                        )
+
+        self.assertEqual([call["max_new_tokens"] for call in fake_gwen.calls], [1124, 512])
+
+    def test_synthesize_with_gwen_falls_back_without_language_for_older_runtime(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
@@ -432,8 +618,8 @@ class TTSServiceHelperTest(unittest.TestCase):
 
             def generate_voice_clone(self, **kwargs: object) -> tuple[list[np.ndarray], int]:
                 self.calls.append(kwargs)
-                if "language" not in kwargs:
-                    raise TypeError("generate_voice_clone() missing 1 required keyword-only argument: 'language'")
+                if "language" in kwargs:
+                    raise TypeError("generate_voice_clone() got an unexpected keyword argument 'language'")
                 wave = np.sin(np.linspace(0, 8, 24000, dtype=np.float32)) * 0.1
                 return [wave], 24000
 
@@ -472,9 +658,9 @@ class TTSServiceHelperTest(unittest.TestCase):
                         )
 
         self.assertEqual(len(fake_gwen.calls), 2)
-        self.assertNotIn("language", fake_gwen.calls[0])
-        self.assertEqual(fake_gwen.calls[1]["language"], "Vietnamese")
-        self.assertTrue(any("app đã fallback sang gọi với `language=\"Vietnamese\"`" in note for note in result.notes))
+        self.assertEqual(fake_gwen.calls[0]["language"], "Vietnamese")
+        self.assertNotIn("language", fake_gwen.calls[1])
+        self.assertTrue(any("fallback sang gọi không truyền `language`" in note for note in result.notes))
 
     def test_gwen_card_is_not_ready_without_cuda(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

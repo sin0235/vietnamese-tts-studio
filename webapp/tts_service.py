@@ -232,8 +232,14 @@ _GWEN_ABBREVIATION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 _GWEN_NUMBER_TOKEN_PATTERN = re.compile(
-    r"(?<![\w/])([-+]?\d[\d.,]*)(\s?(?:%|đ|vnđ|vnd|usd|km|kg|gb|mb))?(?![\w/])",
+    r"(?<![\w/.])([-+]?\d(?:[\d.,]*\d)?)(\s?(?:%|đ|vnđ|vnd|usd|km|kg|gb|mb))?(?![\w/])",
     flags=re.IGNORECASE,
+)
+
+_STRUCTURED_TEXT_TOKEN_PATTERN = re.compile(
+    r"https?://\S*[A-Za-z0-9_/#=&%-]"
+    r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
+    r"|(?<![\w.])[vV]?\d+(?:[.,:/-]\d+)+(?!\w)"
 )
 
 _GWEN_DMY_DATE_PATTERN = re.compile(
@@ -340,31 +346,57 @@ def _parse_number_token(raw_number: str) -> tuple[int | None, str | None]:
     if not token:
         return None, None
 
+    def parse_integer(digits: str) -> int | None:
+        if not digits.isdigit() or len(digits) > 18:
+            return None
+        return sign * int(digits)
+
+    if "." in token and "," in token:
+        decimal_separator = "." if token.rfind(".") > token.rfind(",") else ","
+        grouping_separator = "," if decimal_separator == "." else "."
+        integer_raw, decimal_part = token.rsplit(decimal_separator, 1)
+        groups = integer_raw.split(grouping_separator)
+        if (
+            decimal_part.isdigit()
+            and groups[0].isdigit()
+            and 1 <= len(groups[0]) <= 3
+            and all(len(group) == 3 and group.isdigit() for group in groups[1:])
+        ):
+            integer_part = parse_integer("".join(groups))
+            if integer_part is not None:
+                return integer_part, decimal_part
+        return None, None
+
     separator_match = re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", token)
     if separator_match:
-        return sign * int(token.replace(".", "").replace(",", "")), None
+        integer_part = parse_integer(token.replace(".", "").replace(",", ""))
+        return integer_part, None
 
     if token.count(",") == 1 and token.count(".") == 0:
         left, right = token.split(",", 1)
         if left.isdigit() and right.isdigit():
             if len(right) == 3 and len(left) <= 3:
-                return sign * int(left + right), None
-            return sign * int(left), right
+                return parse_integer(left + right), None
+            return parse_integer(left), right
 
     if token.count(".") == 1 and token.count(",") == 0:
         left, right = token.split(".", 1)
         if left.isdigit() and right.isdigit():
             if len(right) == 3 and len(left) <= 3:
-                return sign * int(left + right), None
-            return sign * int(left), right
+                return parse_integer(left + right), None
+            return parse_integer(left), right
 
-    compact = token.replace(".", "").replace(",", "")
-    if compact.isdigit():
-        return sign * int(compact), None
+    if token.isdigit():
+        return parse_integer(token), None
     return None, None
 
 
 def _number_to_vietnamese_text(raw_number: str) -> str | None:
+    unsigned_number = raw_number.strip().lstrip("+-")
+    if len(unsigned_number) > 1 and unsigned_number.startswith("0") and unsigned_number.isdigit():
+        spoken = " ".join(_VI_DIGIT_WORDS[int(char)] for char in unsigned_number)
+        return f"âm {spoken}" if raw_number.strip().startswith("-") else spoken
+
     integer_part, decimal_part = _parse_number_token(raw_number)
     if integer_part is None:
         return None
@@ -456,6 +488,23 @@ def _strip_sea_language_tags(text: str) -> str:
     return re.sub(r"</?en>", "", text)
 
 
+def _normalize_punctuation_spacing(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for match in _STRUCTURED_TEXT_TOKEN_PATTERN.finditer(text):
+        plain_text = text[cursor : match.start()]
+        plain_text = re.sub(r"\s+([,.;:!?])", r"\1", plain_text)
+        plain_text = re.sub(r"([,.;:!?])(?=[^\s])", r"\1 ", plain_text)
+        parts.extend((plain_text, match.group(0)))
+        cursor = match.end()
+
+    plain_text = text[cursor:]
+    plain_text = re.sub(r"\s+([,.;:!?])", r"\1", plain_text)
+    plain_text = re.sub(r"([,.;:!?])(?=[^\s])", r"\1 ", plain_text)
+    parts.append(plain_text)
+    return "".join(parts)
+
+
 def _get_sea_normalizer() -> Any | None:
     try:
         from sea_g2p import Normalizer
@@ -490,8 +539,7 @@ def _normalize_gwen_text(text: str) -> tuple[str, list[str]]:
         normalized = _normalize_gwen_text_fallback(normalized, notes)
 
     normalized = re.sub(r"\s+", " ", normalized).strip()
-    normalized = re.sub(r"\s+([,.;!?])", r"\1", normalized)
-    normalized = re.sub(r"([,.;!?])([^\s])", r"\1 \2", normalized)
+    normalized = _normalize_punctuation_spacing(normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized, notes
 
@@ -688,48 +736,63 @@ def _format_asr_runtime_error(exc: Exception) -> str:
 
 
 
+_TTS_BREAK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r'''[.!?…]+["'”’)\]}]*(?=\s|$)'''),
+    re.compile(r'''[;:]+["'”’)\]}]*(?=\s|$)'''),
+    re.compile(r",+(?=\s|$)"),
+    re.compile(r"\s+"),
+)
+
+
+def _safe_tts_cut_index(text: str, limit: int) -> int:
+    cut = min(limit, len(text))
+    while cut > 0 and cut < len(text):
+        next_char = text[cut]
+        if (
+            unicodedata.combining(next_char)
+            or next_char in {"\ufe0e", "\ufe0f", "\u200d"}
+            or text[cut - 1] == "\u200d"
+        ):
+            cut -= 1
+            continue
+        break
+    return cut or min(limit, len(text))
+
+
+def _find_tts_break_index(text: str, limit: int) -> int:
+    preferred_start = max(1, limit // 2)
+    for pattern in _TTS_BREAK_PATTERNS:
+        matches = [match.end() for match in pattern.finditer(text, 0, limit + 1) if match.end() >= preferred_start]
+        if matches:
+            return _safe_tts_cut_index(text, matches[-1])
+    return _safe_tts_cut_index(text, limit)
+
+
 def _split_text_for_tts(text: str, max_chars: int = 220) -> list[str]:
-    """Split long Vietnamese text into short sentences/chunks for stable inference."""
+    """Split text near natural punctuation while keeping every chunk bounded."""
     normalized = re.sub(r"\s+", " ", text).strip()
     if not normalized:
         return []
 
-    sentences = re.split(r"(?<=[.!?;:])\s+", normalized)
     chunks: list[str] = []
-    current = ""
+    remaining = normalized
+    minimum_tail = min(40, max_chars // 4)
+    while len(remaining) > max_chars:
+        limit = max_chars
+        tail_length = len(remaining) - limit
+        if 0 < tail_length < minimum_tail:
+            limit = len(remaining) - minimum_tail
 
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        candidate = sentence if not current else f"{current} {sentence}"
-        if len(candidate) <= max_chars:
-            current = candidate
-            continue
+        cut = _find_tts_break_index(remaining, limit)
+        chunk = remaining[:cut].strip()
+        if not chunk:
+            cut = min(max_chars, len(remaining))
+            chunk = remaining[:cut]
+        chunks.append(chunk)
+        remaining = remaining[cut:].strip()
 
-        if current:
-            chunks.append(current)
-            current = ""
-
-        if len(sentence) <= max_chars:
-            current = sentence
-            continue
-
-        words = sentence.split()
-        part = ""
-        for word in words:
-            attempt = word if not part else f"{part} {word}"
-            if len(attempt) <= max_chars:
-                part = attempt
-            else:
-                if part:
-                    chunks.append(part)
-                part = word
-        if part:
-            current = part
-
-    if current:
-        chunks.append(current)
+    if remaining:
+        chunks.append(remaining)
     return chunks
 
 
@@ -787,9 +850,7 @@ def _normalize_tts_prompt_text(text: str) -> tuple[str, list[str]]:
     normalized, repeated_stop_hits = re.subn(r"\.{2,}", ".", normalized)
 
     before_spacing = normalized
-    normalized = re.sub(r"\s+([,.;:!?])", r"\1", normalized)
-    normalized = re.sub(r"([,;:!?])(?=[^\s])", r"\1 ", normalized)
-    normalized = re.sub(r"(?<!\d)\.(?=[^\s\d])", ". ", normalized)
+    normalized = _normalize_punctuation_spacing(normalized)
     normalized = re.sub(r"([(\[{])\s+", r"\1", normalized)
     normalized = re.sub(r"\s+([)\]}])", r"\1", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip(" ,")
@@ -837,7 +898,12 @@ def _split_text_by_words(text: str, *, max_words: int, max_chars: int | None = N
 
 
 
-def _crossfade_join(waves: list[np.ndarray], sample_rate: int, duration_ms: int = 80) -> np.ndarray:
+def _crossfade_join(
+    waves: list[np.ndarray],
+    sample_rate: int,
+    duration_ms: int = 80,
+    silence_threshold: float = 0.02,
+) -> np.ndarray:
     if not waves:
         return np.zeros(1, dtype=np.float32)
     if len(waves) == 1:
@@ -849,6 +915,20 @@ def _crossfade_join(waves: list[np.ndarray], sample_rate: int, duration_ms: int 
     for wave in waves[1:]:
         current = wave.astype(np.float32)
         if crossfade <= 0 or len(output) <= crossfade or len(current) <= crossfade:
+            output = np.concatenate([output, current])
+            continue
+
+        tail_rms = float(np.sqrt(np.mean(output[-crossfade:].astype(np.float64) ** 2)))
+        head_rms = float(np.sqrt(np.mean(current[:crossfade].astype(np.float64) ** 2)))
+        output_rms = float(np.sqrt(np.mean(output.astype(np.float64) ** 2)))
+        current_rms = float(np.sqrt(np.mean(current.astype(np.float64) ** 2)))
+        tail_is_silent = tail_rms <= silence_threshold and (
+            output_rms == 0.0 or tail_rms <= output_rms * 0.35
+        )
+        head_is_silent = head_rms <= silence_threshold and (
+            current_rms == 0.0 or head_rms <= current_rms * 0.35
+        )
+        if not tail_is_silent or not head_is_silent:
             output = np.concatenate([output, current])
             continue
 
@@ -1686,8 +1766,26 @@ class TTSStudioService:
 
         runtime_notes: list[str] = []
         generate_call_kwargs = dict(generation_kwargs)
-        default_call_plan: list[str] = ["direct_no_language", "direct_with_language"]
-        if hasattr(gwen, "create_voice_clone_prompt"):
+        can_create_voice_clone_prompt = hasattr(gwen, "create_voice_clone_prompt")
+        cached_voice_clone_prompt: Any | None = None
+        if len(chunks) > 1 and can_create_voice_clone_prompt:
+            try:
+                cached_voice_clone_prompt = gwen.create_voice_clone_prompt(
+                    ref_audio=str(prepared_reference_audio),
+                    ref_text=reference_text,
+                    x_vector_only_mode=False,
+                )
+            except TypeError:
+                can_create_voice_clone_prompt = False
+            except Exception as exc:  # pragma: no cover - depends on external install
+                raise TTSError(f"Gwen-TTS xử lý audio tham chiếu thất bại: {_format_gwen_runtime_error(exc)}") from exc
+        precomputed_voice_clone_prompt = cached_voice_clone_prompt is not None
+
+        default_call_plan: list[str] = []
+        if cached_voice_clone_prompt is not None:
+            default_call_plan.append("voice_clone_prompt")
+        default_call_plan.extend(("direct_with_language", "direct_no_language"))
+        if can_create_voice_clone_prompt and "voice_clone_prompt" not in default_call_plan:
             default_call_plan.append("voice_clone_prompt")
 
         preferred_call_mode: str | None = None
@@ -1695,6 +1793,20 @@ class TTSStudioService:
         sample_rate: Any = None
 
         for chunk in chunks:
+            chunk_generate_kwargs = dict(generate_call_kwargs)
+            configured_max_new_tokens = int(chunk_generate_kwargs["max_new_tokens"])
+            adaptive_max_new_tokens = max(
+                int(GWEN_GENERATION_LIMITS["max_new_tokens"]["min"]),
+                len(chunk) * 4,
+            )
+            chunk_generate_kwargs["max_new_tokens"] = min(
+                configured_max_new_tokens,
+                adaptive_max_new_tokens,
+            )
+            if chunk_generate_kwargs["max_new_tokens"] < configured_max_new_tokens:
+                if "adaptive_codec_budget" not in runtime_notes:
+                    runtime_notes.append("adaptive_codec_budget")
+
             call_plan = [preferred_call_mode] if preferred_call_mode else []
             call_plan.extend(mode for mode in default_call_plan if mode and mode not in call_plan)
             last_error: Exception | None = None
@@ -1709,10 +1821,10 @@ class TTSStudioService:
                             text=chunk,
                             ref_audio=str(prepared_reference_audio),
                             ref_text=reference_text,
-                            **generate_call_kwargs,
+                            **chunk_generate_kwargs,
                         )
-                        if "upstream_direct_flow" not in runtime_notes:
-                            runtime_notes.append("upstream_direct_flow")
+                        if "language_compatibility_fallback" not in runtime_notes:
+                            runtime_notes.append("language_compatibility_fallback")
                         preferred_call_mode = call_mode
                     elif call_mode == "direct_with_language":
                         wavs, sample_rate = gwen.generate_voice_clone(
@@ -1720,25 +1832,27 @@ class TTSStudioService:
                             language="Vietnamese",
                             ref_audio=str(prepared_reference_audio),
                             ref_text=reference_text,
-                            **generate_call_kwargs,
+                            **chunk_generate_kwargs,
                         )
-                        if "language_fallback" not in runtime_notes:
-                            runtime_notes.append("language_fallback")
+                        if "explicit_vietnamese" not in runtime_notes:
+                            runtime_notes.append("explicit_vietnamese")
                         preferred_call_mode = call_mode
                     else:
-                        voice_clone_prompt = gwen.create_voice_clone_prompt(
-                            ref_audio=str(prepared_reference_audio),
-                            ref_text=reference_text,
-                            x_vector_only_mode=False,
-                        )
+                        if cached_voice_clone_prompt is None:
+                            cached_voice_clone_prompt = gwen.create_voice_clone_prompt(
+                                ref_audio=str(prepared_reference_audio),
+                                ref_text=reference_text,
+                                x_vector_only_mode=False,
+                            )
                         wavs, sample_rate = gwen.generate_voice_clone(
                             text=chunk,
                             language="Vietnamese",
-                            voice_clone_prompt=voice_clone_prompt,
-                            **generate_call_kwargs,
+                            voice_clone_prompt=cached_voice_clone_prompt,
+                            **chunk_generate_kwargs,
                         )
-                        if "prompt_fallback" not in runtime_notes:
-                            runtime_notes.append("prompt_fallback")
+                        prompt_note = "prompt_reuse" if precomputed_voice_clone_prompt else "prompt_fallback"
+                        if prompt_note not in runtime_notes:
+                            runtime_notes.append(prompt_note)
                         preferred_call_mode = call_mode
 
                     raw_waves = list(wavs) if isinstance(wavs, (list, tuple)) else [wavs]
@@ -1749,6 +1863,7 @@ class TTSStudioService:
                     last_error = exc
                     if "unexpected keyword argument" in message and "speed" in message and "speed" in generate_call_kwargs:
                         generate_call_kwargs.pop("speed", None)
+                        chunk_generate_kwargs.pop("speed", None)
                         if "speed_not_supported" not in runtime_notes and abs(float(normalized_generation_config["speed"]) - 1.0) > 1e-6:
                             runtime_notes.append("speed_not_supported")
                         continue
@@ -1761,7 +1876,13 @@ class TTSStudioService:
                     if call_mode in {"direct_no_language", "direct_with_language"} and (
                         "ref_audio" in lowered_message or "ref_text" in lowered_message
                     ):
-                        call_index = max(call_index + 1, len(call_plan) - 1)
+                        prompt_index = call_plan.index("voice_clone_prompt") if "voice_clone_prompt" in call_plan else -1
+                        call_index = prompt_index if prompt_index > call_index else call_index + 1
+                        continue
+                    if call_mode == "voice_clone_prompt" and (
+                        "language" in lowered_message or "voice_clone_prompt" in lowered_message
+                    ):
+                        call_index += 1
                         continue
                     raise TTSError(f"Gwen-TTS sinh audio thất bại: {_format_gwen_runtime_error(exc)}") from exc
                 except Exception as exc:  # pragma: no cover - depends on external install
@@ -1787,14 +1908,18 @@ class TTSStudioService:
             f"Audio tham chiếu Gwen dài khoảng {ref_duration:.2f}s.",
             "Gwen-TTS dùng transcript tham chiếu để clone giọng trực tiếp theo flow inference của upstream.",
         ]
-        if "upstream_direct_flow" in runtime_notes:
-            notes.insert(0, "Đã gọi Gwen theo flow inference upstream: truyền `ref_audio/ref_text` trực tiếp, không ép `language`.")
-        elif "language_fallback" in runtime_notes:
-            notes.insert(0, "Runtime Gwen hiện tại cần `language`; app đã fallback sang gọi với `language=\"Vietnamese\"` cùng `ref_audio/ref_text`.")
+        if "prompt_reuse" in runtime_notes:
+            notes.insert(0, "Đã tạo `voice_clone_prompt` một lần và tái sử dụng cho mọi chunk của request.")
+        elif "explicit_vietnamese" in runtime_notes:
+            notes.insert(0, "Đã gọi Gwen với `language=\"Vietnamese\"` cùng `ref_audio/ref_text`.")
+        elif "language_compatibility_fallback" in runtime_notes:
+            notes.insert(0, "Runtime Gwen hiện tại không nhận `language`; app đã fallback sang gọi không truyền `language`.")
         elif "prompt_fallback" in runtime_notes:
             notes.insert(0, "Runtime Gwen hiện tại không nhận `ref_audio/ref_text` trực tiếp; app đã fallback sang `voice_clone_prompt`.")
         if "speed_not_supported" in runtime_notes:
             notes.append("Runtime `qwen-tts` hiện tại không nhận tham số `speed`; Gwen chạy ở tốc độ mặc định của model.")
+        if "adaptive_codec_budget" in runtime_notes:
+            notes.append("Đã tự điều chỉnh giới hạn codec token theo độ dài từng chunk để tránh sinh audio kéo dài bất thường.")
         if ref_prep_stats.get("converted"):
             notes.append("Reference audio của Gwen đã được convert sang WAV mono 24kHz vì file gốc không phải WAV.")
         if applied_pronunciations:
@@ -2104,4 +2229,3 @@ class TTSStudioService:
             return "Gwen-TTS cần GPU CUDA để chạy local."
 
         return None
-
