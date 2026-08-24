@@ -39,9 +39,9 @@ The project adds an application layer around model inference: Vietnamese-oriente
 - Exact, user-defined pronunciation substitutions applied before language normalization.
 - Ten bundled reference voices with local WAV assets and matching transcripts.
 - Reference-conditioned Gwen-TTS inference with direct-call and compatibility fallbacks.
-- Sentence-aware 320-character chunking followed by sequential synthesis and 80 ms crossfades.
+- Up-to-320-character punctuation-aware chunks, reusable clone prompts, adaptive codec budgets, and silence-gated crossfades.
 - Configurable main-talker and code-predictor generation parameters with server-side range clamping.
-- Single-worker in-process background synthesis with polling and local JSON history.
+- SQLite queue with backpressure, polling, bounded lease retries, and one sequential worker process per GPU.
 - Optional Whisper reference transcription and VibeVoice-ASR general transcription.
 
 ## System Architecture
@@ -51,16 +51,16 @@ flowchart LR
     Browser[Browser: Studio / Voices / ASR] --> Flask[Flask routes and JSON API]
     API[External API client] --> Flask
 
-    Flask --> Jobs[In-process TTS job manager<br/>1 worker]
-    Flask --> Service[TTSStudioService]
-    Jobs --> Service
+    Flask --> Jobs[SQLite job queue]
+    Jobs --> Workers[One sequential worker process / GPU]
+    Workers --> Service[TTSStudioService]
 
     Service --> Text[Text and pronunciation processing]
     Service --> Voice[Preset or uploaded reference]
     Service --> Loader[Lazy model loader and cache]
     Loader --> Gwen[Gwen-TTS / Qwen3TTSModel]
     Gwen --> CUDA[CUDA device 0]
-    Gwen --> Audio[Chunk conversion and 80 ms crossfade]
+    Gwen --> Audio[Chunk conversion and silence-aware assembly]
     Audio --> WAV[Generated WAV]
 
     Flask --> ASR[Optional Whisper / VibeVoice-ASR]
@@ -94,7 +94,7 @@ flowchart TD
     Reference --> Infer
 
     Infer --> Waves[Flatten model waveforms to float32]
-    Waves --> Join[Join chunks with 80 ms crossfade]
+    Waves --> Join[Apply 80 ms crossfade only at silent boundaries]
     Join --> Output[Write local WAV and history entry]
 ```
 
@@ -103,8 +103,8 @@ Request flow:
 1. Flask resolves either a bundled `preset_voice_id` or an uploaded `reference_audio`.
 2. `TTSStudioService.synthesize()` validates target text, reference existence, CUDA/model readiness, and the required reference transcript.
 3. Formatting cleanup runs before pronunciation rules. Vietnamese lexical normalization runs after pronunciation rules.
-4. Text longer than 320 normalized characters is split and generated sequentially with the same reference.
-5. Model outputs are flattened to one-dimensional `float32` waveforms and joined with an 80 ms crossfade.
+4. Text longer than 320 normalized characters is split and generated sequentially; one clone prompt is reused when the runtime supports it.
+5. Model outputs are flattened to one-dimensional `float32` waveforms; an 80 ms crossfade is applied only when both boundaries are classified as silent.
 6. The final waveform is serialized under `webapp/runtime/generated/` and returned through `/outputs/<filename>`.
 
 ## Vietnamese Text Processing
@@ -248,10 +248,10 @@ Loading is lazy: model weights are first loaded when synthesis starts. Instances
 
 The default attention backend is `flash_attention_2`. If loading fails with that exact selection, the service retries with `sdpa`. FlashAttention is therefore optional; SDPA is the built-in compatibility fallback.
 
-Gwen invocation uses this compatibility sequence per chunk:
+For multi-chunk requests, the service prefers to build one `voice_clone_prompt` and reuse it so reference audio is not encoded repeatedly. Single-chunk requests and runtimes without prompt caching use this compatibility sequence:
 
-1. `generate_voice_clone(text, ref_audio, ref_text, ...)` without a language argument;
-2. retry with `language="Vietnamese"` if the installed runtime requires it;
+1. `generate_voice_clone(text, language="Vietnamese", ref_audio, ref_text, ...)`;
+2. retry without `language` if an older runtime rejects that argument;
 3. build an upstream `voice_clone_prompt` when direct `ref_audio`/`ref_text` arguments are unsupported.
 
 If an installed `qwen-tts` runtime rejects `speed`, the service retries without that argument and reports the fallback in the response notes.
@@ -263,11 +263,12 @@ Custom model IDs are supported by the API through `model_key=__custom__` plus `c
 The request limit is 5,000 characters. After all text transformations:
 
 - text at or below 320 characters is generated in one call;
-- longer text is split first at whitespace following `.`, `!`, `?`, `;`, or `:`;
-- an over-limit sentence is split on word boundaries;
-- chunks are synthesized sequentially with one reference voice and one model instance;
+- longer text prefers sentence boundaries, including closing quotes/brackets, then `;`, `:`, commas, and whitespace;
+- hard splits avoid placing a combining mark, variation selector, or ZWJ at the start of a chunk when possible, and very small tails are rebalanced;
+- chunks are synthesized sequentially with one model instance and reuse `voice_clone_prompt` when supported;
+- `max_new_tokens` is a codec-token ceiling; the service uses the lower of the configured ceiling and the adaptive budget `max(512, 4 × chunk characters)`;
 - all returned waveforms are converted to flattened `float32` arrays;
-- adjacent waveforms are overlapped with an 80 ms linear crossfade;
+- adjacent waveforms receive an 80 ms linear crossfade only when both boundary RMS values are low in absolute and relative terms; otherwise they are concatenated;
 - the combined waveform is written as one WAV at the model-returned sample rate, or 24 kHz if no rate is returned.
 
 Chunking reduces per-call text size and makes long requests easier to process, but the repository does not include a measured maximum duration, latency target, real-time factor, or memory profile.
@@ -283,7 +284,7 @@ Values are clamped server-side before inference.
 | `gwen_top_p` | `top_p` | `0.9` | `0.1–1.0` | Main nucleus-sampling threshold |
 | `gwen_top_k` | `top_k` | `20` | `1–100` | Main top-k sampling limit |
 | `gwen_repetition_penalty` | `repetition_penalty` | `2.0` | `1.0–3.0` | Repetition penalty |
-| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Per-call token budget |
+| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Per-call codec-token ceiling; the effective budget adapts down to chunk length |
 | `gwen_subtalker_do_sample` | `subtalker_do_sample` | `true` | boolean | Enable code-predictor sampling |
 | `gwen_subtalker_temperature` | `subtalker_temperature` | `0.1` | `0.1–1.0` | Code-predictor temperature |
 | `gwen_subtalker_top_k` | `subtalker_top_k` | `20` | `1–100` | Code-predictor top-k |
@@ -349,18 +350,18 @@ Settings and history are server-local, not browser-local:
 
 ```text
 Synchronous
-request → synthesis on request thread → 200 result
+request → enqueue in SQLite → wait for GPU worker → 200 result or 202 on timeout
 
 Asynchronous
-request → in-memory job record → 202 + job_id
-        → single background thread → poll status → result
+request → enqueue in SQLite → 202 + job_id
+        → one worker process/GPU → poll status → result
 ```
 
 - Set `async=1` to force background execution.
 - Set `async=0` to force synchronous execution.
 - If omitted, requests carrying `CF-Connecting-IP` or `CF-Ray` default to async; other requests default to sync.
 - The current Studio always sends `async=1` and polls every 1.5 seconds.
-- `TTSJobManager` uses one `ThreadPoolExecutor` worker. Jobs and status are process-local, not distributed or durable.
+- The queue allows 32 non-terminal jobs. FIFO claims use a SQLite transaction; running jobs have a heartbeat lease and at most two claims after worker loss.
 - Job metadata is purged one hour after its last update. Generated WAVs are not purged with job metadata.
 
 ## API
@@ -422,7 +423,7 @@ JOB_ID="$(
 curl -sS "http://127.0.0.1:8386/api/tts/jobs/${JOB_ID}"
 ```
 
-Job responses use `queued`, `running`, `completed`, or `failed`. Completed responses place the synthesis payload under `result`.
+Job responses use `queued`, `running`, `completed`, or `failed`. Completed responses place the synthesis payload under `result`; pending/running responses may include `queue_position`, `gpu_index`, and `attempts`. When 32 non-terminal jobs fill the queue, the API returns `429` with `Retry-After`.
 
 ### Supporting endpoints
 
@@ -524,7 +525,7 @@ python -c "import qwen_tts, sea_g2p; print('Gwen-TTS runtime ready')"
 ### 7. Start the application
 
 ```bash
-python webapp/app.py
+TTS_GPU_IDS=0 python -m webapp.serve --host 0.0.0.0 --port 8386
 ```
 
 Open `http://127.0.0.1:8386/studio/gwen`.
@@ -535,7 +536,7 @@ For Whisper reference transcription, enable ASR after installing its Transformer
 
 ```bash
 python -m pip install -U transformers accelerate sentencepiece
-TTS_ENABLE_ASR=1 python webapp/app.py
+TTS_ENABLE_ASR=1 TTS_GPU_IDS=0 python -m webapp.serve --host 0.0.0.0 --port 8386
 ```
 
 VibeVoice-ASR may require `transformers>=5.3.0`, which conflicts with the checked-in `qwen-tts==0.1.1` profile. Prefer a separate ASR environment rather than replacing the working TTS dependency set in place.
@@ -557,8 +558,8 @@ Use the custom `curl` example above with a 2–18 second reference and its exact
 
 ### Colab and Kaggle notebooks
 
-- `colab_tts_cloudflare.ipynb` installs the TTS-only profile, runs Flask, opens a Cloudflare Quick Tunnel, and can sync generated/reference/data directories to Google Drive.
-- `kaggle_tts_cloudflare.ipynb` provides the analogous workflow with backup under `/kaggle/working/tts_backup/`.
+- `colab_tts_cloudflare.ipynb` sets `TTS_GPU_IDS=0`, runs the Flask/worker supervisor, opens a Cloudflare Quick Tunnel, and can sync generated/reference/data directories to Google Drive.
+- `kaggle_tts_cloudflare.ipynb` uses `TTS_GPU_IDS=0,1` when the runtime reports at least two GPUs and otherwise falls back to `0`; backup remains under `/kaggle/working/tts_backup/`.
 
 Both notebooks currently hard-code the former URL `https://github.com/sin0235/text2speech.git`. Change `REPO_URL` to `https://github.com/sin0235/vietnamese-tts-studio.git` before running them from a fresh session.
 
@@ -572,6 +573,11 @@ Both notebooks currently hard-code the former URL `https://github.com/sin0235/te
 | `TTS_WEBAPP_PORT` | `8386` | Flask port; invalid values fall back to `8386` |
 | `TTS_WEBAPP_DEBUG` | `0` | Enable Flask debug for `1`, `true`, `yes`, or `on` |
 | `TTS_WEBAPP_RELOADER` | `0` | Enable Flask reloader using the same truthy values |
+| `TTS_GPU_IDS` | `0` | Physical GPU IDs such as `0,1`; the supervisor starts one sequential worker per GPU |
+| `TTS_QUEUE_MAX_PENDING` | `32` | Maximum number of `queued` or `running` jobs |
+| `TTS_JOB_LEASE_SECONDS` | `30` | Running-job lease renewed by worker heartbeat |
+| `TTS_JOB_MAX_ATTEMPTS` | `2` | Maximum claims before an expired job becomes `failed` |
+| `TTS_SYNC_WAIT_SECONDS` | `120` | How long `async=0` waits before returning `202` for continued polling |
 
 ### Gwen-TTS
 
@@ -585,8 +591,8 @@ Both notebooks currently hard-code the former URL `https://github.com/sin0235/te
 ```bash
 GWEN_DTYPE=float16 \
 GWEN_ATTN_IMPLEMENTATION=sdpa \
-TTS_WEBAPP_HOST=127.0.0.1 \
-python webapp/app.py
+TTS_GPU_IDS=0 \
+python -m webapp.serve --host 127.0.0.1 --port 8386
 ```
 
 ### ASR
@@ -606,6 +612,7 @@ python webapp/app.py
 ```text
 webapp/runtime/references/   Uploaded and converted reference recordings
 webapp/runtime/generated/    Generated WAV files
+webapp/runtime/tts_jobs.sqlite3  Local SQLite queue state
 models/                      Reserved local directory; not the configured Hugging Face cache
 ```
 
@@ -616,9 +623,9 @@ webapp/data/user_settings.json   Latest text and pronunciation rules
 webapp/data/tts_history.json     Up to 50 successful synthesis records
 ```
 
-Model weights use the default Hugging Face cache unless external environment configuration changes it. In-process job state is memory-only and disappears when Flask restarts; generated and reference files remain on disk.
+Model weights use the default Hugging Face cache unless external environment configuration changes it. SQLite queue state survives Flask restarts, and expired leases receive bounded retries. Do not back up the live queue database to Drive.
 
-Reference recordings, transcripts, target text, and generated speech may be sensitive. Current code provides no authentication, tenant isolation, encryption layer, automatic cleanup, or access-control policy. Do not expose the Flask server or notebook Cloudflare tunnel to untrusted users. Keep runtime audio and generated JSON state out of commits and backups unless sharing is intentional and authorized. No `.gitignore` is currently checked in, so this exclusion must be enforced manually.
+Reference recordings, transcripts, target text, and generated speech may be sensitive. Current code provides no authentication, tenant isolation, encryption layer, automatic cleanup, or access-control policy. Do not expose the Flask server or notebook Cloudflare tunnel to untrusted users. `.gitignore` excludes runtime queue/audio and local JSON state; external backups still require explicit control.
 
 ## Project Structure
 
@@ -660,7 +667,7 @@ Tests cover:
 
 - Flask routing, JSON errors, upload limits, ASR gating, preset submission, and async job status;
 - text cleanup, Vietnamese number/date/abbreviation fallback behavior, pronunciation rules, and parameter clamping;
-- preset metadata resolution, reference normalization/validation, direct Gwen call selection, language fallback, and sequential chunk calls;
+- preset metadata resolution, reference normalization/validation, language fallback, chunk boundaries, prompt reuse, adaptive codec budgets, and silence-aware audio assembly;
 - attention/import error messages and CUDA readiness checks.
 
 Gwen and ASR inference are mocked. Tests do not download model weights, execute real CUDA synthesis, validate acoustic quality, or exercise a full VibeVoice-ASR run.
@@ -673,9 +680,9 @@ No reproducible MOS, speaker-similarity, CER/WER, intelligibility, naturalness, 
 
 ## Limitations
 
-- Local Gwen-TTS is hard-bound to one CUDA GPU (`cuda:0`); CPU-only TTS is unavailable.
+- Each Gwen-TTS worker sees one physical GPU and uses `cuda:0` inside its process; CPU-only TTS is unavailable.
 - Synthesis is non-streaming. Clients receive a complete WAV after all chunks finish.
-- Background jobs use one process-local worker with no durable queue, cancellation, retry policy, or multi-instance coordination.
+- The SQLite queue provides backpressure, leases, and bounded retries, but has no API to cancel a running job or assign priorities.
 - The browser Studio currently exposes presets only; custom reference synthesis requires direct API use.
 - VibeVoice-ASR and the pinned TTS notebook profile require incompatible Transformers versions.
 - Reference and generated audio are retained indefinitely unless removed manually.

@@ -39,9 +39,9 @@ Project bổ sung lớp ứng dụng quanh model inference: làm sạch văn b�
 - Thay thế cách phát âm chính xác do người dùng định nghĩa trước bước chuẩn hóa ngôn ngữ.
 - Mười giọng tham chiếu có sẵn với file WAV cục bộ và transcript tương ứng.
 - Gwen-TTS inference có điều kiện tham chiếu với lệnh gọi trực tiếp và các fallback tương thích.
-- Chia đoạn 320 ký tự theo câu, sinh tuần tự và crossfade 80 ms.
+- Chia đoạn tối đa 320 ký tự theo biên câu/dấu câu, tái sử dụng clone prompt, điều chỉnh codec budget theo chunk và chỉ crossfade tại biên im lặng.
 - Tham số sinh cho main-talker và code-predictor có thể cấu hình, được giới hạn phạm vi phía server.
-- Tổng hợp nền trong process bằng một worker, hỗ trợ polling và lịch sử JSON cục bộ.
+- Queue SQLite có backpressure, polling, lease/retry hữu hạn và một worker process tuần tự trên mỗi GPU.
 - Tùy chọn chép lời tham chiếu bằng Whisper và chép lời tổng quát bằng VibeVoice-ASR.
 
 ## Kiến trúc hệ thống
@@ -51,16 +51,16 @@ flowchart LR
     Browser[Trình duyệt: Studio / Voices / ASR] --> Flask[Flask routes và JSON API]
     API[API client bên ngoài] --> Flask
 
-    Flask --> Jobs[Trình quản lý TTS job trong process<br/>1 worker]
-    Flask --> Service[TTSStudioService]
-    Jobs --> Service
+    Flask --> Jobs[SQLite job queue]
+    Jobs --> Workers[Một worker process tuần tự / GPU]
+    Workers --> Service[TTSStudioService]
 
     Service --> Text[Xử lý văn bản và phát âm]
     Service --> Voice[Preset hoặc tham chiếu tải lên]
     Service --> Loader[Lazy model loader và cache]
     Loader --> Gwen[Gwen-TTS / Qwen3TTSModel]
     Gwen --> CUDA[CUDA device 0]
-    Gwen --> Audio[Chuyển đổi chunk và crossfade 80 ms]
+    Gwen --> Audio[Chuyển đổi chunk và nối audio theo silence]
     Audio --> WAV[WAV được tạo]
 
     Flask --> ASR[Whisper / VibeVoice-ASR tùy chọn]
@@ -74,7 +74,7 @@ flowchart LR
 - **UI:** Jinja template render phía server, JavaScript thuần và CSS responsive cho Studio, Voices và trang ASR tùy chọn.
 - **Application:** Flask kiểm tra multipart request, phục vụ file đã sinh, lưu cài đặt/lịch sử và cung cấp API sync/async.
 - **Service:** `TTSStudioService` chịu trách nhiệm tiền xử lý, phân giải/tải model, inference, xử lý tham chiếu, ghép audio và ASR.
-- **Runtime:** tham chiếu tải lên, WAV tham chiếu đã chuyển đổi, đầu ra đã sinh, trạng thái JSON, job trong bộ nhớ và cache Hugging Face bên ngoài.
+- **Runtime:** tham chiếu tải lên, WAV đã chuyển đổi, đầu ra đã sinh, queue SQLite, trạng thái JSON và cache Hugging Face bên ngoài.
 
 ## Pipeline TTS đầu cuối
 
@@ -94,7 +94,7 @@ flowchart TD
     Reference --> Infer
 
     Infer --> Waves[Trải phẳng waveform model thành float32]
-    Waves --> Join[Ghép chunk bằng crossfade 80 ms]
+    Waves --> Join[Chỉ crossfade 80 ms khi hai biên im lặng]
     Join --> Output[Ghi WAV cục bộ và mục lịch sử]
 ```
 
@@ -103,8 +103,8 @@ Luồng request:
 1. Flask phân giải `preset_voice_id` có sẵn hoặc `reference_audio` được tải lên.
 2. `TTSStudioService.synthesize()` kiểm tra văn bản đích, sự tồn tại của tham chiếu, trạng thái CUDA/model và transcript tham chiếu bắt buộc.
 3. Làm sạch định dạng chạy trước quy tắc phát âm. Chuẩn hóa từ vựng tiếng Việt chạy sau quy tắc phát âm.
-4. Văn bản dài hơn 320 ký tự sau chuẩn hóa được chia và sinh tuần tự với cùng tham chiếu.
-5. Đầu ra model được trải phẳng thành waveform `float32` một chiều và ghép bằng crossfade 80 ms.
+4. Văn bản dài hơn 320 ký tự sau chuẩn hóa được chia và sinh tuần tự; clone prompt được tạo một lần rồi tái sử dụng khi runtime hỗ trợ.
+5. Đầu ra model được trải phẳng thành waveform `float32` một chiều; crossfade 80 ms chỉ áp dụng khi cả hai biên được nhận diện là im lặng.
 6. Waveform cuối được ghi dưới `webapp/runtime/generated/` và trả qua `/outputs/<filename>`.
 
 ## Xử lý văn bản tiếng Việt
@@ -248,10 +248,10 @@ Model được tải lazy khi bắt đầu lần tổng hợp đầu tiên. Inst
 
 Attention backend mặc định là `flash_attention_2`. Nếu tải thất bại với đúng lựa chọn này, service thử lại bằng `sdpa`. Vì vậy FlashAttention là tùy chọn; SDPA là fallback tương thích có sẵn.
 
-Mỗi chunk gọi Gwen theo thứ tự tương thích:
+Với request nhiều chunk, service ưu tiên tạo một `voice_clone_prompt` rồi tái sử dụng cho mọi chunk để không encode lại audio tham chiếu. Request một chunk và các runtime không hỗ trợ prompt cache dùng thứ tự tương thích:
 
-1. gọi `generate_voice_clone(text, ref_audio, ref_text, ...)` không có tham số ngôn ngữ;
-2. thử lại với `language="Vietnamese"` nếu runtime đã cài yêu cầu;
+1. gọi `generate_voice_clone(text, language="Vietnamese", ref_audio, ref_text, ...)`;
+2. thử lại không truyền `language` nếu runtime cũ không chấp nhận tham số này;
 3. tạo `voice_clone_prompt` theo upstream khi không hỗ trợ trực tiếp tham số `ref_audio`/`ref_text`.
 
 Nếu runtime `qwen-tts` đã cài không chấp nhận `speed`, service thử lại không có tham số đó và ghi fallback vào `notes` của response.
@@ -263,11 +263,12 @@ API hỗ trợ model ID tùy chỉnh qua `model_key=__custom__` cùng `custom_mo
 Giới hạn request là 5.000 ký tự. Sau mọi bước biến đổi văn bản:
 
 - văn bản tối đa 320 ký tự được sinh bằng một lần gọi;
-- văn bản dài hơn được chia trước tại khoảng trắng sau `.`, `!`, `?`, `;` hoặc `:`;
-- câu vượt giới hạn được chia theo ranh giới từ;
-- các chunk được tổng hợp tuần tự bằng cùng giọng tham chiếu và model instance;
+- văn bản dài hơn ưu tiên biên câu kể cả dấu ngoặc kép/ngoặc đóng, sau đó lần lượt dùng `;`, `:`, dấu phẩy và khoảng trắng;
+- hard split tránh đặt combining mark, variation selector hoặc ZWJ ở đầu chunk khi có thể và cân bằng tail quá ngắn;
+- các chunk được tổng hợp tuần tự bằng cùng model instance và dùng lại `voice_clone_prompt` khi runtime hỗ trợ;
+- `max_new_tokens` là trần codec token; service dùng giá trị nhỏ hơn giữa trần cấu hình và ngân sách thích nghi `max(512, 4 × số ký tự chunk)`;
 - mọi waveform trả về được chuyển thành mảng `float32` đã trải phẳng;
-- các waveform liền kề được chồng bằng linear crossfade 80 ms;
+- các waveform liền kề chỉ được linear crossfade 80 ms khi RMS ở cả hai biên thấp cả theo ngưỡng tuyệt đối và tương đối; nếu không chúng được nối trực tiếp;
 - waveform tổng hợp được ghi thành một WAV ở sample rate do model trả về, hoặc 24 kHz nếu không có sample rate.
 
 Chia chunk giảm kích thước văn bản mỗi lần gọi và giúp xử lý request dài dễ hơn. Repository chưa có số đo về thời lượng tối đa, mục tiêu độ trễ, real-time factor hoặc memory profile.
@@ -283,7 +284,7 @@ Giá trị được giới hạn phía server trước inference.
 | `gwen_top_p` | `top_p` | `0.9` | `0.1–1.0` | Ngưỡng nucleus sampling chính |
 | `gwen_top_k` | `top_k` | `20` | `1–100` | Giới hạn top-k chính |
 | `gwen_repetition_penalty` | `repetition_penalty` | `2.0` | `1.0–3.0` | Mức phạt lặp |
-| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Token budget mỗi lần gọi |
+| `gwen_max_new_tokens` | `max_new_tokens` | `4096` | `512–8192` | Trần codec token mỗi lần gọi; budget thực tế tự giảm theo độ dài chunk |
 | `gwen_subtalker_do_sample` | `subtalker_do_sample` | `true` | boolean | Bật sampling cho code-predictor |
 | `gwen_subtalker_temperature` | `subtalker_temperature` | `0.1` | `0.1–1.0` | Temperature của code-predictor |
 | `gwen_subtalker_top_k` | `subtalker_top_k` | `20` | `1–100` | Top-k của code-predictor |
@@ -349,18 +350,18 @@ Cài đặt và lịch sử nằm cục bộ trên server, không phải cục b
 
 ```text
 Đồng bộ
-request → tổng hợp trên request thread → kết quả 200
+request → enqueue SQLite → chờ worker GPU → kết quả 200 hoặc 202 khi hết timeout
 
 Bất đồng bộ
-request → job record trong bộ nhớ → 202 + job_id
-        → một background thread → poll trạng thái → kết quả
+request → enqueue SQLite → 202 + job_id
+        → một worker process/GPU → poll trạng thái → kết quả
 ```
 
 - Đặt `async=1` để buộc chạy nền.
 - Đặt `async=0` để buộc chạy đồng bộ.
 - Nếu bỏ qua, request có `CF-Connecting-IP` hoặc `CF-Ray` mặc định chạy async; request khác mặc định chạy sync.
 - Studio hiện luôn gửi `async=1` và poll mỗi 1,5 giây.
-- `TTSJobManager` dùng một worker `ThreadPoolExecutor`. Job và trạng thái chỉ tồn tại trong process, không phân tán hoặc durable.
+- Queue giới hạn 32 job chưa terminal. Claim FIFO dùng transaction SQLite; mỗi job chạy có lease, heartbeat và tối đa hai lần claim khi worker chết.
 - Metadata job bị xóa một giờ sau lần cập nhật cuối. WAV đã sinh không bị xóa cùng metadata job.
 
 ## API
@@ -422,7 +423,7 @@ JOB_ID="$(
 curl -sS "http://127.0.0.1:8386/api/tts/jobs/${JOB_ID}"
 ```
 
-Job response dùng `queued`, `running`, `completed` hoặc `failed`. Response hoàn tất đặt payload tổng hợp dưới `result`.
+Job response dùng `queued`, `running`, `completed` hoặc `failed`. Response hoàn tất đặt payload tổng hợp dưới `result`; trạng thái chờ/chạy có thể kèm `queue_position`, `gpu_index` và `attempts`. Khi 32 job chưa terminal đã chiếm queue, API trả `429` cùng `Retry-After`.
 
 ### Endpoint hỗ trợ
 
@@ -524,7 +525,7 @@ python -c "import qwen_tts, sea_g2p; print('Gwen-TTS runtime ready')"
 ### 7. Khởi động ứng dụng
 
 ```bash
-python webapp/app.py
+TTS_GPU_IDS=0 python -m webapp.serve --host 0.0.0.0 --port 8386
 ```
 
 Mở `http://127.0.0.1:8386/studio/gwen`.
@@ -535,7 +536,7 @@ Mở `http://127.0.0.1:8386/studio/gwen`.
 
 ```bash
 python -m pip install -U transformers accelerate sentencepiece
-TTS_ENABLE_ASR=1 python webapp/app.py
+TTS_ENABLE_ASR=1 TTS_GPU_IDS=0 python -m webapp.serve --host 0.0.0.0 --port 8386
 ```
 
 VibeVoice-ASR có thể yêu cầu `transformers>=5.3.0`, xung đột với profile `qwen-tts==0.1.1` trong repository. Nên dùng environment ASR riêng thay vì thay thế dependency TTS đang hoạt động tại chỗ.
@@ -557,8 +558,8 @@ Dùng ví dụ `curl` tùy chỉnh ở trên với tham chiếu dài 2–18 giâ
 
 ### Notebook Colab và Kaggle
 
-- `colab_tts_cloudflare.ipynb` cài profile chỉ dành cho TTS, chạy Flask, mở Cloudflare Quick Tunnel và có thể đồng bộ thư mục generated/reference/data lên Google Drive.
-- `kaggle_tts_cloudflare.ipynb` cung cấp quy trình tương tự với bản sao lưu dưới `/kaggle/working/tts_backup/`.
+- `colab_tts_cloudflare.ipynb` đặt `TTS_GPU_IDS=0`, chạy supervisor Flask/worker, mở Cloudflare Quick Tunnel và có thể đồng bộ thư mục generated/reference/data lên Google Drive.
+- `kaggle_tts_cloudflare.ipynb` dùng `TTS_GPU_IDS=0,1` khi runtime thấy ít nhất hai GPU, nếu không fallback `0`; quy trình backup nằm dưới `/kaggle/working/tts_backup/`.
 
 Cả hai notebook hiện hard-code URL cũ `https://github.com/sin0235/text2speech.git`. Đổi `REPO_URL` thành `https://github.com/sin0235/vietnamese-tts-studio.git` trước khi chạy từ phiên mới.
 
@@ -572,6 +573,11 @@ Cả hai notebook hiện hard-code URL cũ `https://github.com/sin0235/text2spee
 | `TTS_WEBAPP_PORT` | `8386` | Cổng Flask; giá trị không hợp lệ fallback về `8386` |
 | `TTS_WEBAPP_DEBUG` | `0` | Bật Flask debug với `1`, `true`, `yes` hoặc `on` |
 | `TTS_WEBAPP_RELOADER` | `0` | Bật Flask reloader với cùng các giá trị truthy |
+| `TTS_GPU_IDS` | `0` | Danh sách GPU vật lý, ví dụ `0,1`; supervisor tạo đúng một worker tuần tự trên mỗi GPU |
+| `TTS_QUEUE_MAX_PENDING` | `32` | Số job `queued` hoặc `running` tối đa |
+| `TTS_JOB_LEASE_SECONDS` | `30` | Lease của job đang chạy; worker heartbeat gia hạn định kỳ |
+| `TTS_JOB_MAX_ATTEMPTS` | `2` | Số lần claim tối đa trước khi job hết lease chuyển `failed` |
+| `TTS_SYNC_WAIT_SECONDS` | `120` | Thời gian `async=0` chờ; hết hạn trả `202` để client tiếp tục poll |
 
 ### Gwen-TTS
 
@@ -585,8 +591,8 @@ Cả hai notebook hiện hard-code URL cũ `https://github.com/sin0235/text2spee
 ```bash
 GWEN_DTYPE=float16 \
 GWEN_ATTN_IMPLEMENTATION=sdpa \
-TTS_WEBAPP_HOST=127.0.0.1 \
-python webapp/app.py
+TTS_GPU_IDS=0 \
+python -m webapp.serve --host 127.0.0.1 --port 8386
 ```
 
 ### ASR
@@ -606,6 +612,7 @@ python webapp/app.py
 ```text
 webapp/runtime/references/   Bản ghi tham chiếu đã tải lên và chuyển đổi
 webapp/runtime/generated/    File WAV đã sinh
+webapp/runtime/tts_jobs.sqlite3  Trạng thái queue SQLite cục bộ
 models/                      Thư mục cục bộ để dành; không phải Hugging Face cache đã cấu hình
 ```
 
@@ -616,9 +623,9 @@ webapp/data/user_settings.json   Văn bản và quy tắc phát âm gần nhất
 webapp/data/tts_history.json     Tối đa 50 bản ghi tổng hợp thành công
 ```
 
-Model weight dùng Hugging Face cache mặc định trừ khi cấu hình environment bên ngoài thay đổi. Trạng thái job trong process chỉ nằm trong bộ nhớ và mất khi Flask khởi động lại; file tham chiếu và file đã sinh vẫn còn trên đĩa.
+Model weight dùng Hugging Face cache mặc định trừ khi cấu hình environment bên ngoài thay đổi. Trạng thái queue nằm trong SQLite và còn sau khi Flask khởi động lại; lease hết hạn được retry hữu hạn. Không sao lưu file queue đang hoạt động lên Drive.
 
-Bản ghi tham chiếu, transcript, văn bản đích và tiếng nói được sinh có thể là dữ liệu nhạy cảm. Code hiện tại không có authentication, tenant isolation, lớp mã hóa, tự động dọn dẹp hoặc chính sách access control. Không mở Flask server hoặc Cloudflare tunnel trong notebook cho người dùng không tin cậy. Không commit hoặc sao lưu audio runtime và trạng thái JSON trừ khi việc chia sẻ là chủ đích và được cho phép. Repository hiện không có `.gitignore`, nên cần tự kiểm soát việc loại trừ này.
+Bản ghi tham chiếu, transcript, văn bản đích và tiếng nói được sinh có thể là dữ liệu nhạy cảm. Code hiện tại không có authentication, tenant isolation, lớp mã hóa, tự động dọn dẹp hoặc chính sách access control. Không mở Flask server hoặc Cloudflare tunnel trong notebook cho người dùng không tin cậy. `.gitignore` loại trừ runtime queue/audio và JSON trạng thái cục bộ; vẫn cần kiểm soát backup bên ngoài repository.
 
 ## Cấu trúc project
 
@@ -660,7 +667,7 @@ Test bao phủ:
 
 - Flask routing, lỗi JSON, giới hạn upload, ASR gating, submit preset và trạng thái job async;
 - làm sạch văn bản, fallback cho số/ngày/từ viết tắt tiếng Việt, quy tắc phát âm và giới hạn tham số;
-- phân giải metadata preset, chuẩn hóa/kiểm tra tham chiếu, chọn lệnh gọi Gwen trực tiếp, fallback ngôn ngữ và gọi chunk tuần tự;
+- phân giải metadata preset, chuẩn hóa/kiểm tra tham chiếu, fallback ngôn ngữ, biên chunk, prompt cache, codec budget thích nghi và nối audio theo silence;
 - thông báo lỗi attention/import và kiểm tra trạng thái CUDA.
 
 Gwen và ASR inference được mock. Test không tải model weight, chạy tổng hợp CUDA thật, đánh giá chất lượng âm thanh hoặc chạy VibeVoice-ASR đầy đủ.
@@ -673,9 +680,9 @@ Hiện chưa có benchmark MOS, độ tương đồng người nói, CER/WER, đ
 
 ## Hạn chế
 
-- Gwen-TTS cục bộ gắn cố định vào một GPU CUDA (`cuda:0`); không hỗ trợ TTS chỉ dùng CPU.
+- Mỗi worker Gwen-TTS chỉ thấy một GPU vật lý và dùng `cuda:0` bên trong process; không hỗ trợ TTS chỉ dùng CPU.
 - Quá trình tổng hợp không streaming. Client nhận WAV hoàn chỉnh sau khi mọi chunk hoàn tất.
-- Job nền dùng một worker cục bộ trong process, không có hàng đợi durable, hủy job, retry policy hoặc điều phối nhiều instance.
+- Queue SQLite có backpressure, lease và retry hữu hạn nhưng chưa có API hủy job đang chạy hoặc ưu tiên job.
 - Studio trên trình duyệt hiện chỉ cung cấp preset; tổng hợp bằng tham chiếu tùy chỉnh cần gọi API trực tiếp.
 - VibeVoice-ASR và profile TTS notebook đã pin yêu cầu các phiên bản Transformers không tương thích.
 - Audio tham chiếu và audio đã sinh được giữ vô thời hạn nếu không xóa thủ công.
