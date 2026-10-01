@@ -1092,16 +1092,16 @@
 
   async function parseApiResponse(response) {
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    const rawText = (await response.text()).trim();
 
     if (contentType.includes('application/json')) {
       try {
-        return await response.json();
+        return JSON.parse(rawText);
       } catch (error) {
-        console.error('Không parse được JSON từ API.', error);
+        // Fall back to the already-read body when the API returns invalid JSON.
       }
     }
 
-    const rawText = (await response.text()).trim();
     if (response.status === 413) {
       return {
         ok: false,
@@ -1109,7 +1109,8 @@
       };
     }
 
-    const fallbackError = rawText && !rawText.startsWith('<') ? rawText : `API trả về lỗi ${response.status}.`;
+    const fallbackError = rawText && !rawText.startsWith('<') ? rawText
+      : response.ok ? 'API trả về dữ liệu không hợp lệ.' : `API trả về lỗi ${response.status}.`;
     return {
       ok: false,
       error: fallbackError,
@@ -1241,7 +1242,7 @@
         signal,
       });
       const payload = await parseApiResponse(response);
-      if (!response.ok && response.status !== 200) {
+      if (!response.ok || !payload.ok) {
         throw new Error(payload.error || `Không lấy được trạng thái job (HTTP ${response.status}).`);
       }
       if (payload.done) {
