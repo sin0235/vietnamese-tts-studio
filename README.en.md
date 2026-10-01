@@ -248,11 +248,11 @@ Loading is lazy: model weights are first loaded when synthesis starts. Instances
 
 The default attention backend is `flash_attention_2`. If loading fails with that exact selection, the service retries with `sdpa`. FlashAttention is therefore optional; SDPA is the built-in compatibility fallback.
 
-For multi-chunk requests, the service prefers to build one `voice_clone_prompt` and reuse it so reference audio is not encoded repeatedly. Single-chunk requests and runtimes without prompt caching use this compatibility sequence:
+The service first calls `generate_voice_clone` directly, following Gwen's inference flow, and only creates and caches a `voice_clone_prompt` when the runtime does not support `ref_audio`/`ref_text`. Its compatibility sequence is:
 
-1. `generate_voice_clone(text, language="Vietnamese", ref_audio, ref_text, ...)`;
-2. retry without `language` if an older runtime rejects that argument;
-3. build an upstream `voice_clone_prompt` when direct `ref_audio`/`ref_text` arguments are unsupported.
+1. `generate_voice_clone(text, ref_audio, ref_text, ...)`, allowing Gwen to detect Vietnamese as its upstream inference script does;
+2. pass `language="Vietnamese"` when the runtime requires it;
+3. use `voice_clone_prompt` when direct `ref_audio`/`ref_text` arguments are unsupported.
 
 If an installed `qwen-tts` runtime rejects `speed`, the service retries without that argument and reports the fallback in the response notes.
 

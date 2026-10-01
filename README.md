@@ -248,11 +248,11 @@ Model được tải lazy khi bắt đầu lần tổng hợp đầu tiên. Inst
 
 Attention backend mặc định là `flash_attention_2`. Nếu tải thất bại với đúng lựa chọn này, service thử lại bằng `sdpa`. Vì vậy FlashAttention là tùy chọn; SDPA là fallback tương thích có sẵn.
 
-Với request nhiều chunk, service ưu tiên tạo một `voice_clone_prompt` rồi tái sử dụng cho mọi chunk để không encode lại audio tham chiếu. Request một chunk và các runtime không hỗ trợ prompt cache dùng thứ tự tương thích:
+Service gọi trực tiếp `generate_voice_clone` theo flow của Gwen trước; chỉ tạo và cache `voice_clone_prompt` nếu runtime không hỗ trợ `ref_audio`/`ref_text`. Thứ tự tương thích:
 
-1. gọi `generate_voice_clone(text, language="Vietnamese", ref_audio, ref_text, ...)`;
-2. thử lại không truyền `language` nếu runtime cũ không chấp nhận tham số này;
-3. tạo `voice_clone_prompt` theo upstream khi không hỗ trợ trực tiếp tham số `ref_audio`/`ref_text`.
+1. gọi `generate_voice_clone(text, ref_audio, ref_text, ...)`, để Gwen tự nhận diện tiếng Việt như script inference upstream;
+2. truyền `language="Vietnamese"` nếu runtime yêu cầu;
+3. dùng `voice_clone_prompt` nếu runtime không hỗ trợ trực tiếp `ref_audio`/`ref_text`.
 
 Nếu runtime `qwen-tts` đã cài không chấp nhận `speed`, service thử lại không có tham số đó và ghi fallback vào `notes` của response.
 

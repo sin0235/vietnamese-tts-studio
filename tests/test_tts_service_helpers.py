@@ -422,7 +422,7 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertTrue(output_exists)
         self.assertTrue(any("convert sang WAV mono 24kHz" in note for note in result.notes))
 
-    def test_synthesize_with_gwen_prefers_explicit_vietnamese_language(self) -> None:
+    def test_synthesize_with_gwen_preserves_upstream_auto_language(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
@@ -472,8 +472,8 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertEqual(len(fake_gwen.calls), 1)
         self.assertIn("ref_audio", fake_gwen.calls[0])
         self.assertIn("ref_text", fake_gwen.calls[0])
-        self.assertEqual(fake_gwen.calls[0]["language"], "Vietnamese")
-        self.assertTrue(any("language=\"Vietnamese\"" in note for note in result.notes))
+        self.assertNotIn("language", fake_gwen.calls[0])
+        self.assertTrue(any("không ép `language`" in note for note in result.notes))
         self.assertTrue(any("chuẩn hóa số" in note for note in result.notes))
 
     def test_synthesize_with_gwen_calls_each_chunk_sequentially(self) -> None:
@@ -524,11 +524,11 @@ class TTSServiceHelperTest(unittest.TestCase):
 
         self.assertGreater(len(fake_gwen.calls), 1)
         self.assertTrue(all(isinstance(call["text"], str) for call in fake_gwen.calls))
-        self.assertTrue(all(call.get("language") == "Vietnamese" for call in fake_gwen.calls))
+        self.assertTrue(all("language" not in call for call in fake_gwen.calls))
         self.assertEqual(result.chunk_count, len(fake_gwen.calls))
         self.assertTrue(any("gọi Gwen tuần tự" in note for note in result.notes))
 
-    def test_synthesize_with_gwen_reuses_clone_prompt_for_all_chunks(self) -> None:
+    def test_synthesize_with_gwen_caches_prompt_for_compatibility_fallback(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.prompt_calls = 0
@@ -572,7 +572,8 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertTrue(
             all(call["voice_clone_prompt"] is fake_gwen.prompt for call in fake_gwen.successful_calls)
         )
-        self.assertTrue(any("tái sử dụng" in note for note in result.notes))
+        self.assertTrue(all("language" not in call for call in fake_gwen.successful_calls))
+        self.assertTrue(any("fallback sang `voice_clone_prompt`" in note for note in result.notes))
 
     def test_synthesize_with_gwen_adapts_codec_budget_to_each_chunk(self) -> None:
         class FakeGwen:
@@ -608,18 +609,18 @@ class TTSServiceHelperTest(unittest.TestCase):
 
         self.assertEqual([call["max_new_tokens"] for call in fake_gwen.calls], [1124, 512])
 
-    def test_synthesize_with_gwen_falls_back_without_language_for_older_runtime(self) -> None:
+    def test_synthesize_with_gwen_falls_back_when_runtime_requires_language(self) -> None:
         class FakeGwen:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
 
             def create_voice_clone_prompt(self, **_kwargs: object) -> str:
-                raise AssertionError("direct call with language should be used before clone prompt")
+                raise AssertionError("direct call should be used before clone prompt")
 
             def generate_voice_clone(self, **kwargs: object) -> tuple[list[np.ndarray], int]:
                 self.calls.append(kwargs)
-                if "language" in kwargs:
-                    raise TypeError("generate_voice_clone() got an unexpected keyword argument 'language'")
+                if "language" not in kwargs:
+                    raise TypeError("generate_voice_clone() missing required argument: 'language'")
                 wave = np.sin(np.linspace(0, 8, 24000, dtype=np.float32)) * 0.1
                 return [wave], 24000
 
@@ -658,9 +659,9 @@ class TTSServiceHelperTest(unittest.TestCase):
                         )
 
         self.assertEqual(len(fake_gwen.calls), 2)
-        self.assertEqual(fake_gwen.calls[0]["language"], "Vietnamese")
-        self.assertNotIn("language", fake_gwen.calls[1])
-        self.assertTrue(any("fallback sang gọi không truyền `language`" in note for note in result.notes))
+        self.assertNotIn("language", fake_gwen.calls[0])
+        self.assertEqual(fake_gwen.calls[1]["language"], "Vietnamese")
+        self.assertTrue(any("language=\"Vietnamese\"" in note for note in result.notes))
 
     def test_gwen_card_is_not_ready_without_cuda(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
