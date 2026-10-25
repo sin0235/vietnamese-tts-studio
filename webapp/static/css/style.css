@@ -3746,6 +3746,12 @@ footer {
   border-color: var(--border-strong);
 }
 
+.voices-clone-btn-secondary.is-active {
+  background: var(--accent-pale);
+  color: var(--accent);
+  border-color: var(--border-strong);
+}
+
 @media (max-width: 640px) {
   .voices-clone-grid {
     grid-template-columns: 1fr;

@@ -156,6 +156,10 @@
           </div>
 
           {% if engine_card.id == "gwen" and preset_voices_payload %}
+          <div class="voices-clone-actions">
+            <button type="button" class="voices-clone-btn voices-clone-btn-secondary" id="presetVoiceModeBtn">Giọng có sẵn</button>
+            <button type="button" class="voices-clone-btn voices-clone-btn-secondary" id="customVoiceModeBtn">Clone giọng của tôi</button>
+          </div>
           <div id="presetVoiceSection" class="preset-voice-section preset-voice-section-compact">
             <div class="voice-preview-card" id="voicePreviewCard">
               <div class="voice-preview-avatar vl-color-0" id="voicePreviewAvatar"><div class="sound-wave"><span></span><span></span><span></span><span></span><span></span></div></div>
@@ -176,14 +180,25 @@
             </div>
           </div>
 
+          <div id="customReferenceGroup" class="hidden">
+            <label for="referenceAudio">Audio giọng mẫu</label>
+            <label class="upload-box compact-upload-box" for="referenceAudio">
+              <input id="referenceAudio" name="reference_audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,audio/*" />
+              <div class="upload-title">Chọn audio để clone giọng</div>
+              <div class="upload-file" id="uploadFileLabel">Chưa có file nào được chọn</div>
+            </label>
+            <label for="referenceText">Transcript đúng với audio mẫu</label>
+            <textarea id="referenceText" name="reference_text" rows="3" class="form-control" placeholder="Nhập đúng câu có trong audio mẫu..."></textarea>
+            <button type="button" class="voices-clone-btn voices-clone-btn-secondary" id="referenceTranscribeBtn">Nhận diện transcript</button>
+            <div id="referenceTranscribeStatus" class="tts-inline-hint reference-transcribe-status hidden"><span id="referenceTranscribeStatusLabel"></span></div>
+          </div>
+
           <a href="{{ url_for('voices_page') }}" class="voice-browse-link">
             <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
             Khám phá {{ preset_voices_payload|length }} giọng nói + Cloning voices
             <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
           </a>
 
-          <input type="hidden" id="referenceText" name="reference_text" value="" />
-          <input type="hidden" id="referenceAudio" name="reference_audio" value="" />
           {% endif %}
         </section>
 
@@ -386,6 +401,9 @@
   const presetVoiceSelect = document.getElementById('presetVoiceSelect');
   const presetVoicePlayer = document.getElementById('presetVoicePlayer');
   const customReferenceGroup = document.getElementById('customReferenceGroup');
+  const presetVoiceModeBtn = document.getElementById('presetVoiceModeBtn');
+  const customVoiceModeBtn = document.getElementById('customVoiceModeBtn');
+  const referenceTranscribeBtn = document.getElementById('referenceTranscribeBtn');
   const gwenTemperature = document.getElementById('gwenTemperature');
   const gwenTemperatureValue = document.getElementById('gwenTemperatureValue');
   const gwenTopP = document.getElementById('gwenTopP');
@@ -721,12 +739,17 @@
     if (ENGINE_ID !== 'gwen' || !VOICE_PRESETS.length) {
       return;
     }
-    gwenVoiceMode = 'preset';
+    gwenVoiceMode = mode === 'custom' ? 'custom' : 'preset';
+    presetVoiceSection.classList.toggle('hidden', gwenVoiceMode !== 'preset');
+    customReferenceGroup.classList.toggle('hidden', gwenVoiceMode !== 'custom');
+    presetVoiceModeBtn.classList.toggle('is-active', gwenVoiceMode === 'preset');
+    customVoiceModeBtn.classList.toggle('is-active', gwenVoiceMode === 'custom');
+    presetVoiceSelect.disabled = gwenVoiceMode === 'custom';
 
     if (presetVoiceSelect && !presetVoiceSelect.value && VOICE_PRESETS[0]) {
       presetVoiceSelect.value = VOICE_PRESETS[0].id;
     }
-    renderPresetVoiceDetail();
+    if (gwenVoiceMode === 'preset') renderPresetVoiceDetail();
     syncReferenceTextUi();
     syncThemedSelect(presetVoiceSelect);
   }
@@ -1718,6 +1741,15 @@
       syncThemedSelect(presetVoiceSelect);
     });
   }
+  if (presetVoiceModeBtn) presetVoiceModeBtn.addEventListener('click', () => setGwenVoiceMode('preset'));
+  if (customVoiceModeBtn) customVoiceModeBtn.addEventListener('click', () => setGwenVoiceMode('custom'));
+  if (referenceAudio) {
+    referenceAudio.addEventListener('change', () => {
+      const file = referenceAudio.files && referenceAudio.files[0];
+      uploadFileLabel.textContent = file ? `${file.name} - ${(file.size / 1024 / 1024).toFixed(2)} MB` : 'Chưa có file nào được chọn';
+    });
+  }
+  if (referenceTranscribeBtn) referenceTranscribeBtn.addEventListener('click', () => transcribeReferenceAudio());
   if (pronunciationRules) {
     pronunciationRules.addEventListener('input', (event) => {
       if (event.target.closest('.pronunciation-rule-row')) {
@@ -1741,8 +1773,8 @@
     if (!validatePronunciationRules()) {
       return;
     }
-    if (!usesPresetVoice()) {
-      alert('Vui lòng chọn giọng nói trước khi generate.');
+    if (ENGINE_ID === 'gwen' && !usesPresetVoice() && (!referenceAudio.files[0] || !referenceText.value.trim())) {
+      alert('Hãy chọn audio mẫu và nhập transcript để clone giọng.');
       return;
     }
 
