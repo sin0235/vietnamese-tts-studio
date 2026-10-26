@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import importlib
 import importlib.util
 import json
@@ -1220,13 +1221,17 @@ class TTSStudioService:
         self.asr_language = (os.getenv("ASR_LANGUAGE", "vi") or "vi").strip().lower() or "vi"
         self.asr_chunk_length_s = _clamp_int(os.getenv("ASR_CHUNK_LENGTH_S", "18"), minimum=8, maximum=30, default=18)
         self.vibevoice_asr_model_id = os.getenv("VIBEVOICE_ASR_MODEL_ID", "microsoft/VibeVoice-ASR-HF").strip() or "microsoft/VibeVoice-ASR-HF"
+        self.vieneu_model_id = "pnnbao-ump/VieNeu-TTS-v3-Turbo"
         self._locks = {
+            "tts": Lock(),
             "gwen": Lock(),
             "asr": Lock(),
             "vibevoice_asr": Lock(),
         }
         self._loaded_models: dict[str, Any] = {}
+        self._active_tts_model_key: str | None = None
         self._gwen_import_probe: tuple[bool, str | None] | None = None
+        self._vieneu_import_probe: tuple[bool, str | None] | None = None
         self._asr_import_probe: tuple[bool, str | None] | None = None
         self._gwen_preset_voices_cache: list[PresetVoice] | None = None
         self._sea_normalizer: Any | None = None
@@ -1328,6 +1333,20 @@ class TTSStudioService:
         self._gwen_import_probe = (True, None)
         return self._gwen_import_probe
 
+    def _probe_vieneu_import(self) -> tuple[bool, str | None]:
+        if self._vieneu_import_probe is not None:
+            return self._vieneu_import_probe
+        if importlib.util.find_spec("vieneu") is None:
+            self._vieneu_import_probe = (False, "Chưa cài gói `vieneu`.")
+            return self._vieneu_import_probe
+        try:
+            importlib.import_module("vieneu")
+        except Exception as exc:
+            self._vieneu_import_probe = (False, f"Không nạp được VieNeu: {type(exc).__name__}.")
+            return self._vieneu_import_probe
+        self._vieneu_import_probe = (True, None)
+        return self._vieneu_import_probe
+
     def _probe_asr_import(self) -> tuple[bool, str | None]:
         if self._asr_import_probe is not None:
             return self._asr_import_probe
@@ -1389,6 +1408,16 @@ class TTSStudioService:
         }
 
     def get_model_selection(self, engine_id: str) -> dict[str, Any]:
+        if engine_id == "vieneu":
+            return {
+                "default_key": "default",
+                "allow_custom": False,
+                "default_value": self.vieneu_model_id,
+                "custom_placeholder": "",
+                "help_primary": "VieNeu v3 Turbo dùng audio tham chiếu để clone giọng.",
+                "help_secondary": "Model được nạp khi worker xử lý job đầu tiên.",
+                "options": [{"key": "default", "label": self.vieneu_model_id, "value": self.vieneu_model_id, "mode": "default"}],
+            }
         return self._gwen_model_selection()
 
     def resolve_model_spec(
@@ -1398,6 +1427,16 @@ class TTSStudioService:
         model_key: str = "default",
         custom_model: str = "",
     ) -> dict[str, Any]:
+        if engine_id == "vieneu":
+            if (model_key or "default").strip() not in {"", "default"} or (custom_model or "").strip():
+                raise TTSError("VieNeu v3 Turbo chỉ hỗ trợ model mặc định trong phiên bản này.")
+            return {
+                "key": "default",
+                "label": self.vieneu_model_id,
+                "mode": "default",
+                "model_id": self.vieneu_model_id,
+                "cache_key": "vieneu::v3turbo",
+            }
         key = (model_key or "default").strip() or "default"
         custom = (custom_model or "").strip()
 
@@ -1432,20 +1471,24 @@ class TTSStudioService:
         }
 
     def summary(self) -> dict[str, Any]:
-        card = self._gwen_card()
+        cards = self.get_engine_cards()
         device_label = "GPU" if self._torch_cuda_available() else "CPU"
         return {
-            "engine_count": 1,
-            "ready_count": 1 if card.ready else 0,
+            "engine_count": len(cards),
+            "ready_count": sum(1 for card in cards if card.ready),
             "device_label": device_label,
-            "default_engine": card.label,
+            "default_engine": self._gwen_card().label,
         }
 
     def get_engine_cards(self) -> list[EngineCard]:
-        return [self._gwen_card()]
+        return [self._gwen_card(), self._vieneu_card()]
 
     def get_engine_card(self, engine_id: str = "gwen") -> EngineCard:
-        return self._gwen_card()
+        if engine_id == "gwen":
+            return self._gwen_card()
+        if engine_id == "vieneu":
+            return self._vieneu_card()
+        raise TTSError(f"Engine '{engine_id}' không được hỗ trợ.")
 
     def synthesize(
         self,
@@ -1476,26 +1519,42 @@ class TTSStudioService:
         if not text:
             raise TTSError("Văn bản đầu vào rỗng sau khi chuẩn hóa cho TTS.")
 
-        engine = self.get_engine_card()
+        engine = self.get_engine_card(engine_id)
         if not engine.ready:
             raise TTSError(engine.warning or engine.summary)
-        model_spec = self.resolve_model_spec(model_key=model_key, custom_model=custom_model)
+        model_spec = self.resolve_model_spec(engine_id, model_key=model_key, custom_model=custom_model)
+        output_path = self.output_dir / f"{int(time.time())}-{uuid.uuid4().hex[:10]}-{engine_id}.wav"
+        if engine_id == "vieneu":
+            with self._locks["tts"]:
+                result = self._synthesize_with_vieneu(
+                    text=text,
+                    reference_audio=reference_audio,
+                    model_spec=model_spec,
+                    output_path=output_path,
+                    pronunciation_overrides=pronunciation_overrides,
+                    speed=speed,
+                    remove_silence=remove_silence,
+                    seed=seed,
+                )
+            if input_normalization_notes:
+                result.notes.insert(0, " ".join(input_normalization_notes))
+            return result
         if not reference_text:
             raise TTSError(
                 "Gwen-TTS cần transcript tham chiếu. Hãy nhập đúng câu đang có trong audio tham chiếu trước khi generate."
             )
 
-        output_path = self.output_dir / f"{int(time.time())}-{uuid.uuid4().hex[:10]}-gwen.wav"
-        result = self._synthesize_with_gwen(
-            text=text,
-            reference_audio=reference_audio,
-            reference_text=reference_text,
-            model_spec=model_spec,
-            output_path=output_path,
-            speed=speed,
-            gwen_generation_config=gwen_generation_config,
-            pronunciation_overrides=pronunciation_overrides,
-        )
+        with self._locks["tts"]:
+            result = self._synthesize_with_gwen(
+                text=text,
+                reference_audio=reference_audio,
+                reference_text=reference_text,
+                model_spec=model_spec,
+                output_path=output_path,
+                speed=speed,
+                gwen_generation_config=gwen_generation_config,
+                pronunciation_overrides=pronunciation_overrides,
+            )
 
         if input_normalization_notes:
             result.notes.insert(0, " ".join(input_normalization_notes))
@@ -1678,9 +1737,117 @@ class TTSStudioService:
             },
         )
 
+    def _vieneu_card(self) -> EngineCard:
+        module_ok, import_warning = self._probe_vieneu_import()
+        if module_ok:
+            summary = "VieNeu v3 Turbo sẵn sàng clone giọng từ audio tham chiếu."
+            warning = None
+        elif import_warning == "Chưa cài gói `vieneu`.":
+            summary = import_warning
+            warning = "Cài `vieneu` từ `yeu_cau_vieneu.txt`; checkpoint chỉ tải khi worker nhận job đầu tiên."
+        else:
+            summary = "VieNeu v3 Turbo chưa sẵn sàng với runtime hiện tại."
+            warning = import_warning
+        return EngineCard(
+            id="vieneu",
+            label="VieNeu v3 Turbo",
+            headline="Clone giọng tiếng Việt bằng audio tham chiếu, không cần transcript.",
+            description="Adapter dùng `Vieneu(mode=\"v3turbo\").infer(...)` và tạo audio WAV 48 kHz.",
+            recommended_for="Dùng khi muốn thử clone giọng với VieNeu v3 Turbo.",
+            output_quality="WAV 48 kHz; chất lượng và tốc độ còn phụ thuộc GPU/CPU và audio mẫu.",
+            reference_hint="Audio tham chiếu rõ tiếng, một người nói; VieNeu không bắt buộc transcript.",
+            supports_reference_text=False,
+            ready=module_ok,
+            summary=summary,
+            warning=warning,
+            metadata={"model": self.vieneu_model_id, "sample_rate": 48000, "mode": "v3turbo"},
+        )
+
+    def _prepare_tts_model_slot(self, cache_key: str) -> None:
+        if self._active_tts_model_key == cache_key and cache_key in self._loaded_models:
+            return
+        old_keys = [key for key in self._loaded_models if key.startswith(("gwen::", "vieneu::"))]
+        for key in old_keys:
+            self._loaded_models.pop(key, None)
+        self._active_tts_model_key = None
+        if old_keys:
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    def _load_vieneu(self) -> Any:
+        cache_key = "vieneu::v3turbo"
+        self._prepare_tts_model_slot(cache_key)
+        if cache_key in self._loaded_models:
+            return self._loaded_models[cache_key]
+        try:
+            from vieneu import Vieneu
+            model = Vieneu(mode="v3turbo")
+        except Exception as exc:  # pragma: no cover - depends on optional install
+            raise TTSError(f"Không nạp được VieNeu v3 Turbo: {type(exc).__name__}.") from exc
+        self._loaded_models[cache_key] = model
+        self._active_tts_model_key = cache_key
+        return model
+
+    def _synthesize_with_vieneu(
+        self,
+        *,
+        text: str,
+        reference_audio: Path,
+        model_spec: dict[str, Any],
+        output_path: Path,
+        pronunciation_overrides: list[tuple[str, str]] | None,
+        speed: float,
+        remove_silence: bool,
+        seed: int | None,
+    ) -> SynthesisResult:
+        if not reference_audio.exists():
+            raise TTSError("Không tìm thấy file audio tham chiếu.")
+        model = self._load_vieneu()
+        transformed_text, applied_pronunciations = _apply_pronunciation_overrides(text, pronunciation_overrides)
+        normalized_text, normalization_notes = _normalize_tts_prompt_text(transformed_text)
+        started = time.perf_counter()
+        try:
+            audio = _to_numpy_audio(model.infer(normalized_text, ref_audio=str(reference_audio), denoise=True))
+        except Exception as exc:
+            raise TTSError(f"VieNeu không tổng hợp được audio: {type(exc).__name__}.") from exc
+        if audio.size == 0:
+            raise TTSError("VieNeu trả về audio rỗng.")
+        sample_rate = 48000
+        sf.write(output_path, audio, sample_rate)
+        notes = list(normalization_notes)
+        if applied_pronunciations:
+            notes.append(f"Đã áp dụng {len(applied_pronunciations)} quy tắc phát âm trước khi tổng hợp.")
+        if speed != 1.0:
+            notes.append("VieNeu v3 Turbo không nhận tham số tốc độ trong giao diện này; audio dùng tốc độ mặc định của model.")
+        if remove_silence:
+            notes.append("VieNeu v3 Turbo chưa áp dụng tùy chọn xóa khoảng lặng.")
+        if seed is not None:
+            notes.append("VieNeu v3 Turbo chưa áp dụng seed tùy chỉnh.")
+        notes.append("VieNeu v3 Turbo tự xử lý audio tham chiếu; transcript tham chiếu không bắt buộc.")
+        return SynthesisResult(
+            engine_id="vieneu",
+            engine_label="VieNeu v3 Turbo",
+            model_key=model_spec["key"],
+            model_label=model_spec["label"],
+            output_path=output_path,
+            sample_rate=sample_rate,
+            duration_seconds=len(audio) / sample_rate,
+            inference_seconds=time.perf_counter() - started,
+            chunk_count=max(1, len(_split_text_for_tts(normalized_text, max_chars=256))),
+            reference_text_used=False,
+            seed=None,
+            notes=notes,
+        )
+
     def _load_gwen(self, model_spec: dict[str, Any]) -> Any:
         with self._locks["gwen"]:
             cache_key = model_spec["cache_key"]
+            self._prepare_tts_model_slot(cache_key)
             if cache_key in self._loaded_models:
                 return self._loaded_models[cache_key]
 
@@ -1731,6 +1898,7 @@ class TTSStudioService:
                 pass
 
             self._loaded_models[cache_key] = instance
+            self._active_tts_model_key = cache_key
             return instance
 
     def _synthesize_with_gwen(

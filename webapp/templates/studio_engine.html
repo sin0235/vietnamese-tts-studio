@@ -200,6 +200,16 @@
           </a>
 
           {% endif %}
+
+          {% if engine_card.id == "vieneu" %}
+          <label for="referenceAudio">Audio giọng mẫu</label>
+          <label class="upload-box compact-upload-box" for="referenceAudio">
+            <input id="referenceAudio" name="reference_audio" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,audio/*" />
+            <div class="upload-title">Chọn audio để clone giọng</div>
+            <div class="upload-file" id="uploadFileLabel">Chưa có tệp nào được chọn</div>
+          </label>
+          <p class="tts-inline-hint">VieNeu dùng trực tiếp audio tham chiếu, không cần transcript.</p>
+          {% endif %}
         </section>
 
         {% if engine_card.id == "gwen" and gwen_settings_payload %}

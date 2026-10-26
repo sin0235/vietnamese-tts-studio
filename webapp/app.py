@@ -348,7 +348,9 @@ def _asr_disabled_response():
 def _build_synthesis_submission() -> SynthesisSubmission:
     upload = request.files.get("reference_audio")
     text = (request.form.get("text") or "").strip()
-    engine_id = "gwen"
+    engine_id = (request.form.get("engine") or "gwen").strip().lower()
+    if engine_id not in {"gwen", "vieneu"}:
+        raise ValueError("Engine TTS không được hỗ trợ.")
     preset_voice_id = (request.form.get("preset_voice_id") or "").strip().lower()
     model_key = (request.form.get("model_key") or "default").strip() or "default"
     custom_model = (request.form.get("custom_model") or "").strip()
@@ -361,7 +363,7 @@ def _build_synthesis_submission() -> SynthesisSubmission:
     pronunciation_overrides: list[tuple[str, str]] = []
 
     preset_voice = None
-    if preset_voice_id:
+    if engine_id == "gwen" and preset_voice_id:
         preset_voice, reference_path = studio.get_preset_voice_reference(engine_id, preset_voice_id)
         reference_text = preset_voice.reference_text
         app.logger.info(
@@ -388,9 +390,12 @@ def _build_synthesis_submission() -> SynthesisSubmission:
             len(reference_text),
         )
 
-    gwen_generation_config = _parse_gwen_generation_form()
     pronunciation_overrides = _parse_pronunciation_form()
-    speed = float(gwen_generation_config["speed"])
+    if engine_id == "gwen":
+        gwen_generation_config = _parse_gwen_generation_form()
+        speed = float(gwen_generation_config["speed"])
+    else:
+        speed = 1.0
 
     seed = None
     if seed_raw:
@@ -453,7 +458,7 @@ def home():
 
 @app.route("/studio/<engine_id>")
 def engine_page(engine_id: str):
-    if engine_id != "gwen":
+    if engine_id not in {"gwen", "vieneu"}:
         abort(404)
     return render_template("studio_engine.html", **_engine_page_context(engine_id))
 

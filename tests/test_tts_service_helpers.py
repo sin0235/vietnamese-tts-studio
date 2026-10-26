@@ -33,6 +33,59 @@ from webapp.tts_service import (
 
 
 class TTSServiceHelperTest(unittest.TestCase):
+    def test_vieneu_engine_is_offered_with_reference_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = TTSStudioService(Path(tmpdir))
+        with patch.object(service, "_probe_vieneu_import", return_value=(True, None)):
+            card = service.get_engine_card("vieneu")
+
+        self.assertEqual(card.id, "vieneu")
+        self.assertTrue(card.ready)
+        self.assertFalse(card.supports_reference_text)
+
+    def test_vieneu_synthesis_uses_reference_audio_without_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            service = TTSStudioService(root)
+            reference = root / "reference.wav"
+            reference.write_bytes(b"reference")
+
+            class FakeVieNeu:
+                def __init__(self) -> None:
+                    self.call = None
+
+                def infer(self, text: str, **kwargs):
+                    self.call = (text, kwargs)
+                    return np.zeros(4800, dtype=np.float32)
+
+            model = FakeVieNeu()
+            with patch.object(service, "_probe_vieneu_import", return_value=(True, None)), patch.object(
+                service, "_load_vieneu", return_value=model
+            ):
+                result = service.synthesize(
+                    engine_id="vieneu",
+                    text="Xin chào VieNeu.",
+                    reference_audio=reference,
+                )
+                self.assertTrue(result.output_path.exists())
+
+        self.assertEqual(result.engine_id, "vieneu")
+        self.assertEqual(result.sample_rate, 48000)
+        self.assertEqual(model.call[0], "Xin chào VieNeu.")
+        self.assertEqual(model.call[1]["ref_audio"], str(reference))
+
+    def test_switching_tts_provider_releases_old_tts_model_but_keeps_asr_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = TTSStudioService(Path(tmpdir))
+        service._loaded_models = {"gwen::old": object(), "asr::whisper": object()}
+        service._active_tts_model_key = "gwen::old"
+
+        service._prepare_tts_model_slot("vieneu::v3turbo")
+
+        self.assertNotIn("gwen::old", service._loaded_models)
+        self.assertIn("asr::whisper", service._loaded_models)
+        self.assertIsNone(service._active_tts_model_key)
+
     def test_normalize_reference_wave_boosts_quiet_audio(self) -> None:
         audio = np.array([0.0, 0.02, -0.04, 0.01], dtype=np.float32)
 
@@ -261,13 +314,13 @@ class TTSServiceHelperTest(unittest.TestCase):
 
         self.assertTrue(service.is_asr_enabled())
 
-    def test_engine_cards_returns_only_gwen(self) -> None:
+    def test_engine_cards_returns_gwen_and_vieneu(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with tempfile.TemporaryDirectory() as tmpdir:
                 service = TTSStudioService(Path(tmpdir))
                 cards = service.get_engine_cards()
 
-        self.assertEqual([card.id for card in cards], ["gwen"])
+        self.assertEqual([card.id for card in cards], ["gwen", "vieneu"])
 
     def test_get_preset_voices_loads_gwen_presets_from_config(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

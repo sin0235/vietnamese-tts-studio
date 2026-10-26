@@ -27,11 +27,14 @@ Văn bản đích + preset tham chiếu có sẵn → Gwen-TTS → WAV
 
 Tổng hợp có điều kiện tham chiếu (sao chép giọng nói)
 Audio tham chiếu + transcript tham chiếu chính xác + văn bản đích → Gwen-TTS → WAV
+Audio tham chiếu + văn bản đích → VieNeu v3 Turbo → WAV
 ```
 
-“Sao chép giọng nói” trong repository này là điều kiện hóa tại thời điểm inference. Ứng dụng không train, fine-tune hoặc lưu một model người nói mới cho từng người dùng. Mỗi yêu cầu tổng hợp đều được điều kiện hóa bằng bản ghi tham chiếu và transcript tương ứng.
+Studio hỗ trợ chọn một engine cho từng yêu cầu: Gwen-TTS hoặc VieNeu v3 Turbo. VieNeu clone từ audio tham chiếu, không cần transcript; engine được nạp khi worker nhận job và chỉ một model TTS được giữ hoạt động tại một thời điểm. Gói VieNeu là tùy chọn: `python -m pip install -r yeu_cau_vieneu.txt`. Notebook thử clone giọng trên Google Colab: [thu_nghiem_vieneu_clone_giong_colab.ipynb](thu_nghiem_vieneu_clone_giong_colab.ipynb).
 
-Project bổ sung lớp ứng dụng quanh model inference: làm sạch văn bản theo tiếng Việt, chuẩn hóa tùy chọn bằng `sea-g2p`, quy tắc phát âm, kiểm tra tham chiếu, chia đoạn khi sinh văn bản dài, ghép audio bằng crossfade, quản lý preset, job nền, lịch sử/cài đặt cục bộ và ASR tùy chọn. Studio trên trình duyệt hiện tổng hợp bằng preset có sẵn; TTS API hỗ trợ đầy đủ tham chiếu tùy chỉnh.
+“Sao chép giọng nói” trong repository này là điều kiện hóa tại thời điểm inference. Ứng dụng không train, fine-tune hoặc lưu một model người nói mới cho từng người dùng. Gwen-TTS dùng transcript khớp với audio tham chiếu; VieNeu nhận audio tham chiếu trực tiếp.
+
+Project bổ sung lớp ứng dụng quanh model inference: làm sạch văn bản theo tiếng Việt, chuẩn hóa tùy chọn bằng `sea-g2p`, quy tắc phát âm, kiểm tra tham chiếu, chia đoạn khi sinh văn bản dài, ghép audio bằng crossfade, quản lý preset, job nền, lịch sử/cài đặt cục bộ và ASR tùy chọn. Studio trên trình duyệt hỗ trợ preset Gwen-TTS và audio tham chiếu tùy chỉnh cho cả Gwen-TTS lẫn VieNeu.
 
 ## Điểm kỹ thuật chính
 

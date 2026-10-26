@@ -27,11 +27,14 @@ Target text + bundled preset reference → Gwen-TTS → WAV
 
 Reference-conditioned synthesis (voice cloning)
 Reference audio + exact reference transcript + target text → Gwen-TTS → WAV
+Reference audio + target text → VieNeu v3 Turbo → WAV
 ```
 
-“Voice cloning” in this repository means inference-time conditioning. The application does not train, fine-tune, or persist a new speaker model for each user. A reference recording and its transcript condition every synthesis request.
+The Studio lets each request use one engine: Gwen-TTS or VieNeu v3 Turbo. VieNeu clones from reference audio without a transcript; the worker loads it on the first job and keeps only one TTS model active at a time. VieNeu is optional: `python -m pip install -r yeu_cau_vieneu.txt`. Try voice cloning in [the Google Colab notebook](thu_nghiem_vieneu_clone_giong_colab.ipynb).
 
-The project adds an application layer around model inference: Vietnamese-oriented text cleanup, optional `sea-g2p` normalization, pronunciation overrides, reference validation, chunked long-text inference, crossfaded audio assembly, preset management, background jobs, local history/settings, and optional ASR. The primary browser Studio currently synthesizes with bundled presets; custom references are fully accepted by the TTS API.
+“Voice cloning” in this repository means inference-time conditioning. The application does not train, fine-tune, or persist a new speaker model for each user. Gwen-TTS uses a matching reference transcript; VieNeu takes reference audio directly.
+
+The project adds an application layer around model inference: Vietnamese-oriented text cleanup, optional `sea-g2p` normalization, pronunciation overrides, reference validation, chunked long-text inference, crossfaded audio assembly, preset management, background jobs, local history/settings, and optional ASR. The browser Studio supports Gwen-TTS presets and custom reference audio for both Gwen-TTS and VieNeu.
 
 ## Technical Highlights
 

@@ -25,6 +25,16 @@ class ApiErrorHandlingTest(unittest.TestCase):
         self.assertIn("Gwen-TTS", response.get_data(as_text=True))
         self.assertNotIn('href="/asr"', response.get_data(as_text=True))
 
+    def test_vieneu_engine_page_renders_clone_upload_without_transcript(self) -> None:
+        response = self.client.get("/studio/vieneu")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="engine" value="vieneu"', html)
+        self.assertIn('id="referenceAudio"', html)
+        self.assertIn("không cần transcript", html)
+        self.assertNotIn('id="referenceText"', html)
+
     def test_asr_page_redirects_to_studio_when_disabled(self) -> None:
         response = self.client.get("/asr", follow_redirects=False)
 
@@ -63,6 +73,24 @@ class ApiErrorHandlingTest(unittest.TestCase):
                 "error": "Cần upload audio tham chiếu trước khi sinh giọng.",
             },
         )
+
+    def test_vieneu_generation_queues_uploaded_reference_without_transcript(self) -> None:
+        with patch("webapp.app.studio.save_reference_file", return_value=studio.reference_dir / "ref.wav"), patch(
+            "webapp.app.tts_job_manager.enqueue", return_value="job-vieneu"
+        ):
+            response = self.client.post(
+                "/api/tts/generate",
+                data={
+                    "engine": "vieneu",
+                    "text": "Xin chào.",
+                    "reference_audio": (BytesIO(b"audio"), "ref.wav"),
+                    "async": "1",
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_id"], "job-vieneu")
 
     def test_transcribe_reference_returns_disabled_when_asr_off(self) -> None:
         response = self.client.post("/api/tts/transcribe-reference", data={}, content_type="multipart/form-data")
