@@ -1,1 +1,2 @@
 vieneu
+huggingface-hub<1.32

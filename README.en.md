@@ -30,7 +30,7 @@ Reference audio + exact reference transcript + target text → Gwen-TTS → WAV
 Reference audio + target text → VieNeu v3 Turbo → WAV
 ```
 
-The Studio lets each request use one engine: Gwen-TTS or VieNeu v3 Turbo. VieNeu clones from reference audio without a transcript; the worker loads it on the first job and keeps only one TTS model active at a time. VieNeu is optional: `python -m pip install -r yeu_cau_vieneu.txt`. Try voice cloning in [the Google Colab notebook](thu_nghiem_vieneu_clone_giong_colab.ipynb).
+The Studio lets each request use one engine: Gwen-TTS or VieNeu v3 Turbo. VieNeu clones from reference audio without a transcript; the worker loads it on the first job and keeps only one TTS model active at a time. VieNeu is optional: `python -m pip install -r yeu_cau_vieneu.txt`; the requirements pin `huggingface-hub<1.32` so ONNX graphs and external data remain in a compatible cache layout. Try voice cloning in [the Google Colab notebook](thu_nghiem_vieneu_clone_giong_colab.ipynb).
 
 “Voice cloning” in this repository means inference-time conditioning. The application does not train, fine-tune, or persist a new speaker model for each user. Gwen-TTS uses a matching reference transcript; VieNeu takes reference audio directly.
 

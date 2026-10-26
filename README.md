@@ -30,7 +30,7 @@ Audio tham chiếu + transcript tham chiếu chính xác + văn bản đích →
 Audio tham chiếu + văn bản đích → VieNeu v3 Turbo → WAV
 ```
 
-Studio hỗ trợ chọn một engine cho từng yêu cầu: Gwen-TTS hoặc VieNeu v3 Turbo. VieNeu clone từ audio tham chiếu, không cần transcript; engine được nạp khi worker nhận job và chỉ một model TTS được giữ hoạt động tại một thời điểm. Gói VieNeu là tùy chọn: `python -m pip install -r yeu_cau_vieneu.txt`. Notebook thử clone giọng trên Google Colab: [thu_nghiem_vieneu_clone_giong_colab.ipynb](thu_nghiem_vieneu_clone_giong_colab.ipynb).
+Studio hỗ trợ chọn một engine cho từng yêu cầu: Gwen-TTS hoặc VieNeu v3 Turbo. VieNeu clone từ audio tham chiếu, không cần transcript; engine được nạp khi worker nhận job và chỉ một model TTS được giữ hoạt động tại một thời điểm. Gói VieNeu là tùy chọn: `python -m pip install -r yeu_cau_vieneu.txt`; file này ghim `huggingface-hub<1.32` để giữ các file ONNX và external data trong cùng cache layout. Notebook thử clone giọng trên Google Colab: [thu_nghiem_vieneu_clone_giong_colab.ipynb](thu_nghiem_vieneu_clone_giong_colab.ipynb).
 
 “Sao chép giọng nói” trong repository này là điều kiện hóa tại thời điểm inference. Ứng dụng không train, fine-tune hoặc lưu một model người nói mới cho từng người dùng. Gwen-TTS dùng transcript khớp với audio tham chiếu; VieNeu nhận audio tham chiếu trực tiếp.
 
