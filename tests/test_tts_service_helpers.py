@@ -43,6 +43,14 @@ class TTSServiceHelperTest(unittest.TestCase):
         self.assertTrue(card.ready)
         self.assertFalse(card.supports_reference_text)
 
+    def test_vieneu_probe_disables_shared_huggingface_blob_cache(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HF_HUB_DISABLE_SHARED_BLOBS", None)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                TTSStudioService(Path(tmpdir))
+
+            self.assertEqual(os.environ["HF_HUB_DISABLE_SHARED_BLOBS"], "1")
+
     def test_vieneu_synthesis_uses_reference_audio_without_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

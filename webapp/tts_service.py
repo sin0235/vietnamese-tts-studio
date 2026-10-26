@@ -1200,6 +1200,8 @@ class TTSStudioService:
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
+        # ONNX external weights must resolve inside one Hugging Face cache directory.
+        os.environ.setdefault("HF_HUB_DISABLE_SHARED_BLOBS", "1")
         self.runtime_dir = self.root / "webapp" / "runtime"
         self.reference_dir = self.runtime_dir / "references"
         self.output_dir = self.runtime_dir / "generated"
